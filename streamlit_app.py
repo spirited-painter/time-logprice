@@ -24,25 +24,25 @@ plt.rcParams['axes.unicode_minus'] = False
 
 ASSET_MAP = {
     "A股指数": {
-        "创业板指": {"code": "sz399006", "source": "akshare"},
-        "沪深300": {"code": "sh000300", "source": "akshare"},
-        "上证50": {"code": "sh000016", "source": "akshare"},
-        "中证500": {"code": "sh000905", "source": "akshare"},
-        "中证1000": {"code": "sh000852", "source": "akshare"},
-        "科创50": {"code": "sh000688", "source": "akshare"},
-        "上证综合指数": {"code": "sh000001", "source": "akshare"},
-        "中证银行": {"code": "sz399986", "source": "akshare"},
-        "中证券商": {"code": "sz399975", "source": "akshare"},
-        "中证保险": {"code": "sz399809", "source": "akshare"},
-        "中证主要消费": {"code": "sh000932", "source": "akshare"},
-        "中证可选消费": {"code": "sh000931", "source": "akshare"},
-        "国证食品饮料": {"code": "sz399396", "source": "akshare"},
-        "中证白酒": {"code": "sz399997", "source": "akshare"},
-        "中证医药卫生": {"code": "sh000933", "source": "akshare"},
-        "中证房地产": {"code": "sh000952", "source": "akshare"},
-        "中证基建工程": {"code": "sz399995", "source": "akshare"},
-        "中证能源": {"code": "sh000928", "source": "akshare"},
-        "中证材料": {"code": "sh000929", "source": "akshare"},
+        "创业板指": {"code": "sz399006", "source": "akshare_sina"},
+        "沪深300": {"code": "sh000300", "source": "akshare_sina"},
+        "上证50": {"code": "sh000016", "source": "akshare_sina"},
+        "中证500": {"code": "sh000905", "source": "akshare_sina"},
+        "中证1000": {"code": "sh000852", "source": "akshare_sina"},
+        "科创50": {"code": "sh000688", "source": "akshare_sina"},
+        "上证综合指数": {"code": "sh000001", "source": "akshare_sina"},
+        "中证银行": {"code": "sz399986", "source": "akshare_sina"},
+        "中证券商": {"code": "sz399975", "source": "akshare_sina"},
+        "中证保险": {"code": "sz399809", "source": "akshare_sina"},
+        "中证主要消费": {"code": "sh000932", "source": "akshare_sina"},
+        "中证可选消费": {"code": "sh000931", "source": "akshare_sina"},
+        "国证食品饮料": {"code": "sz399396", "source": "akshare_sina"},
+        "中证白酒": {"code": "sz399997", "source": "akshare_sina"},
+        "中证医药卫生": {"code": "sh000933", "source": "akshare_sina"},
+        "中证房地产": {"code": "sh000952", "source": "akshare_sina"},
+        "中证基建工程": {"code": "sz399995", "source": "akshare_sina"},
+        "中证能源": {"code": "sh000928", "source": "akshare_sina"},
+        "中证材料": {"code": "sh000929", "source": "akshare_sina"},
     },
     "美股指数": {
         "S&P 500": {"code": "^GSPC", "source": "yfinance"},
@@ -76,31 +76,35 @@ FREQ_CONFIG = {
 
 
 def fetch_data(asset_code, source, freq="monthly"):
-    """获取 OHLCV 数据。freq: 'monthly'/'weekly'/'daily'。source: 'tushare'/'akshare'/'yfinance'。"""
-    if source == "tushare":
-        import tushare as ts
-        pro = ts.pro_api('0fa942b3121e1e96a016f0db7bbbab30a13e2d0b8106fdb29248092c')
-        # 支持 akshare 格式转换: sz399006 → 399006.SZ
-        ts_code = asset_code
-        if asset_code.startswith(('sh', 'sz')) and '.' not in asset_code:
-            prefix = asset_code[:2].upper()
-            num = asset_code[2:]
-            ts_code = f"{num}.{'SH' if prefix == 'SH' else 'SZ'}"
-        daily_data = pro.index_daily(ts_code=ts_code, start_date='19900101')
+    """获取 OHLCV 数据。freq: 'monthly'/'weekly'/'daily'。
+    source: 'akshare'/'akshare_em'(东方财富) / 'akshare_sina'(新浪) / 'akshare_tx'(腾讯) / 'yfinance'。"""
+    if source in ("akshare", "akshare_em"):
+        import akshare as ak
+        daily_data = ak.stock_zh_index_daily_em(
+            symbol=asset_code, period="daily",
+            start_date="19900101", end_date="20990101")
         if daily_data is None or daily_data.empty:
             return None
         daily_data.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low',
-                                    'close': 'Close', 'vol': 'Volume'}, inplace=True)
-        daily_data['date'] = pd.to_datetime(daily_data['trade_date'], format='%Y%m%d')
+                                    'close': 'Close', 'volume': 'Volume'}, inplace=True)
+        daily_data['date'] = pd.to_datetime(daily_data['date'])
         daily_data.set_index('date', inplace=True)
-        daily_data.sort_index(inplace=True)
-    elif source == "akshare":
+    elif source == "akshare_sina":
         import akshare as ak
         daily_data = ak.stock_zh_index_daily(symbol=asset_code)
-        if daily_data.empty:
+        if daily_data is None or daily_data.empty:
             return None
         daily_data.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low',
                                     'close': 'Close', 'volume': 'Volume'}, inplace=True)
+        daily_data['date'] = pd.to_datetime(daily_data['date'])
+        daily_data.set_index('date', inplace=True)
+    elif source == "akshare_tx":
+        import akshare as ak
+        daily_data = ak.stock_zh_index_daily_tx(symbol=asset_code)
+        if daily_data is None or daily_data.empty:
+            return None
+        daily_data.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low',
+                                    'close': 'Close', 'amount': 'Volume'}, inplace=True)
         daily_data['date'] = pd.to_datetime(daily_data['date'])
         daily_data.set_index('date', inplace=True)
     else:  # yfinance
@@ -159,7 +163,8 @@ def generate_monotonic_matrix(num_iters, num_tiers, min_val, max_val, min_gap):
 def run_full_analysis(index_name, index_code, source="akshare",
                       custom_slope=None, custom_intercept=None,
                       custom_buy_rules=None, custom_sell_rules=None,
-                      backtest_start_date=None, extra_initial_cash=0,
+                      backtest_start_date=None, backtest_end_date=None,
+                      extra_initial_cash=0,
                       regression_mode="static", freq="monthly",
                       buy_mode="tiered", npower_params=None):
     """运行完整分析，返回 (processed_data, slope, intercept, figures_list)。"""
@@ -178,6 +183,12 @@ def run_full_analysis(index_name, index_code, source="akshare",
     processed_data.reset_index(inplace=True)
     processed_data.insert(1, '序号', range(1, len(processed_data) + 1))
 
+    # 截止日期过滤
+    if backtest_end_date:
+        end_mask = processed_data['日期'] <= backtest_end_date
+        processed_data = processed_data[end_mask].reset_index(drop=True)
+        processed_data['序号'] = range(1, len(processed_data) + 1)
+
     x = processed_data['序号']
     log_y = np.log(processed_data['当月收盘价'])
 
@@ -186,6 +197,8 @@ def run_full_analysis(index_name, index_code, source="akshare",
             x.values, log_y.values)
         processed_data['理论对数值'] = dyn_theo
         processed_data['理论值'] = np.exp(dyn_theo)
+        processed_data['滚动斜率'] = dyn_slopes
+        processed_data['滚动截距'] = dyn_intercepts
         slope, intercept = dyn_slopes[-1], dyn_intercepts[-1]
     else:
         if custom_slope is not None and custom_intercept is not None:
@@ -456,15 +469,20 @@ def run_full_analysis(index_name, index_code, source="akshare",
     return processed_data, slope, intercept, figures
 
 
-def run_monte_carlo_optimization(data, start_date, extra_cash, base_slope, base_icpt,
+def run_monte_carlo_optimization(data, start_date, end_date, extra_cash, base_slope, base_icpt,
                                   num_buy_tiers, num_sell_tiers, num_iters,
                                   target_calmar, min_b_gap, min_s_gap,
                                   regression_mode="static", freq="monthly",
                                   buy_mode="tiered", npower_params=None):
     ppy = FREQ_CONFIG[freq]["periods_per_year"]
     start_idx = data[data['日期'] == start_date].index[0] if start_date else 0
-    close_prices = data['当月收盘价'].values[start_idx:]
-    x_arr = data['序号'].values[start_idx:]
+    if end_date:
+        end_indices = data[data['日期'] == end_date].index
+        end_idx = end_indices[0] + 1 if len(end_indices) > 0 else len(data)
+    else:
+        end_idx = len(data)
+    close_prices = data['当月收盘价'].values[start_idx:end_idx]
+    x_arr = data['序号'].values[start_idx:end_idx]
     num_periods = len(close_prices)
     if num_periods < ppy:
         st.warning("回测周期太短，无法寻优。")
@@ -493,7 +511,7 @@ def run_monte_carlo_optimization(data, start_date, extra_cash, base_slope, base_
     progress_bar = st.progress(0, text="寻优进度: 0%")
 
     if is_dynamic:
-        fixed_pct = data['百分比'].values[start_idx:]
+        fixed_pct = data['百分比'].values[start_idx:end_idx]
         valid_pct = fixed_pct[~np.isnan(fixed_pct)]
         max_b_depth = abs(valid_pct.min()) * 1.3
         max_s_height = valid_pct.max() * 1.3
@@ -645,6 +663,14 @@ def run_monte_carlo_optimization(data, start_date, extra_cash, base_slope, base_
             params_dict['buy_threshold'] = cur_np_bt
             params_dict['sell_n'] = cur_np_sn
             params_dict['sell_threshold'] = cur_np_st
+        # 展平梯队参数：每档的阈值和比例单独作为列
+        if not is_npower:
+            for ti, (t_val, r_val) in enumerate(sorted(exec_buy, key=lambda x: x[0])):
+                params_dict[f'buy_t{ti+1}'] = t_val
+                params_dict[f'buy_r{ti+1}'] = r_val
+            for ti, (t_val, r_val) in enumerate(sorted(exec_sell, key=lambda x: x[0], reverse=True)):
+                params_dict[f'sell_t{ti+1}'] = t_val
+                params_dict[f'sell_r{ti+1}'] = r_val
 
         if calmar >= target_calmar:
             if ann_ret > best_target_ret:
@@ -676,8 +702,9 @@ def run_monte_carlo_optimization(data, start_date, extra_cash, base_slope, base_
     st.markdown(
         f"- **预期年化**: {best['ret'] * 100:.2f}% | **最大回撤**: {best['dd'] * 100:.2f}% "
         f"| **卡玛得分**: {best['calmar']:.2f}")
-    st.markdown(
-        f"- **对数拟合线参数** → 对数斜率: `{best['slope']:.6f}`, 对数截距: `{best['icpt']:.4f}`")
+    if not is_dynamic:
+        st.markdown(
+            f"- **对数拟合线参数** → 对数斜率: `{best['slope']:.6f}`, 对数截距: `{best['icpt']:.4f}`")
 
     if best.get('buy_mode') == 'npower':
         bp = best['buy_rules']
@@ -737,37 +764,72 @@ def run_monte_carlo_optimization(data, start_date, extra_cash, base_slope, base_
 
         ax2 = axes[1]
         is_np_mode = best.get('buy_mode') == 'npower'
+
+        # 收集所有参数的 Spearman 相关系数
+        spearman_rows = []
         if is_np_mode and 'buy_n' in df_samp.columns:
-            labels_vals = []
             for col, lbl in [('buy_threshold', '买入阈值'), ('buy_n', '买入N'),
                               ('sell_threshold', '卖出阈值'), ('sell_n', '卖出N')]:
                 if col in df_samp.columns:
-                    c, _ = spearmanr(df_samp[col], df_samp['ret'])
-                    labels_vals.append((lbl, c))
-            x_labels = [lv[0] for lv in labels_vals]
-            y_values = [lv[1] for lv in labels_vals]
-            palette = ['#3498db', '#e74c3c', '#2ecc71', '#f39c12'][:len(x_labels)]
+                    rho, pval = spearmanr(df_samp[col], df_samp['ret'])
+                    spearman_rows.append(({'参数': lbl, 'Spearman ρ': f'{rho:.4f}', 'p-value': f'{pval:.2e}'}))
         else:
-            corr_slope, _ = spearmanr(df_samp['slope'], df_samp['ret'])
-            corr_buy1, _ = spearmanr(df_samp['1st_buy'], df_samp['ret'])
-            x_labels = ['对数斜率', '第一档买入阈值']
-            y_values = [corr_slope, corr_buy1]
-            palette = ['#3498db', '#e74c3c']
-        sns.barplot(x=x_labels, y=y_values, ax=ax2, hue=x_labels,
-                    palette=palette, legend=False)
-        ax2.set_title('参数敏感度 (与收益率 Spearman 相关)',
-                      fontsize=16, fontweight='bold')
-        ax2.set_ylabel('Spearman 相关系数 (-1 ~ 1)', fontsize=12)
-        ax2.axhline(0, color='black', linewidth=1)
-        ax2.grid(axis='y', linestyle='--', alpha=0.5)
-        plt.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
+            # 梯队模式：分析每档参数
+            if not is_dynamic and 'slope' in df_samp.columns:
+                rho, pval = spearmanr(df_samp['slope'], df_samp['ret'])
+                spearman_rows.append({'参数': '对数斜率', 'Spearman ρ': f'{rho:.4f}', 'p-value': f'{pval:.2e}'})
+            for ti in range(1, num_buy_tiers + 1):
+                col_t = f'buy_t{ti}'
+                col_r = f'buy_r{ti}'
+                if col_t in df_samp.columns:
+                    rho, pval = spearmanr(df_samp[col_t], df_samp['ret'])
+                    spearman_rows.append({'参数': f'买入阈值{ti}', 'Spearman ρ': f'{rho:.4f}', 'p-value': f'{pval:.2e}'})
+                if col_r in df_samp.columns:
+                    rho, pval = spearmanr(df_samp[col_r], df_samp['ret'])
+                    spearman_rows.append({'参数': f'买入比例{ti}', 'Spearman ρ': f'{rho:.4f}', 'p-value': f'{pval:.2e}'})
+            for ti in range(1, num_sell_tiers + 1):
+                col_t = f'sell_t{ti}'
+                col_r = f'sell_r{ti}'
+                if col_t in df_samp.columns:
+                    rho, pval = spearmanr(df_samp[col_t], df_samp['ret'])
+                    spearman_rows.append({'参数': f'卖出阈值{ti}', 'Spearman ρ': f'{rho:.4f}', 'p-value': f'{pval:.2e}'})
+                if col_r in df_samp.columns:
+                    rho, pval = spearmanr(df_samp[col_r], df_samp['ret'])
+                    spearman_rows.append({'参数': f'卖出比例{ti}', 'Spearman ρ': f'{rho:.4f}', 'p-value': f'{pval:.2e}'})
+
+        # 将 Spearman 结果显示为表格（替代原来的柱状图）
+        if spearman_rows:
+            spearman_df = pd.DataFrame(spearman_rows)
+            spearman_df['含义说明'] = spearman_df['Spearman ρ'].apply(
+                lambda x: '强正相关 (参数增大→收益增)' if float(x) > 0.3
+                else ('强负相关 (参数增大→收益减)' if float(x) < -0.3
+                      else '弱相关 (参数对收益影响不显著)'))
+            # 仍然在第二个子图中绘制柱状图
+            rho_vals = [float(r['Spearman ρ']) for r in spearman_rows]
+            param_labels = [r['参数'] for r in spearman_rows]
+            colors = ['#2ecc71' if v > 0.3 else ('#e74c3c' if v < -0.3 else '#95a5a6') for v in rho_vals]
+            ax2.barh(param_labels, rho_vals, color=colors)
+            ax2.set_title('参数敏感度 (与收益率 Spearman 相关)',
+                          fontsize=16, fontweight='bold')
+            ax2.set_xlabel('Spearman ρ', fontsize=12)
+            ax2.axvline(0, color='black', linewidth=1)
+            ax2.grid(axis='x', linestyle='--', alpha=0.5)
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close(fig)
+
+            # 显示 Spearman 详细表格
+            st.markdown("### 📊 参数敏感度 Spearman 相关系数表")
+            st.caption("ρ 值范围 -1 ~ 1。正值表示参数增大时收益倾向于增大，负值反之。|0.3| 以上为显著相关。")
+            st.dataframe(spearman_df, use_container_width=True, hide_index=True)
+        else:
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close(fig)
 
         # 有效前沿表
         if pareto_x:
             st.markdown("### ✨ 有效前沿策略参数明细库 ✨")
-            # Rebuild pareto_rows for the table
             pareto_rows = []
             max_ret_val2 = -999
             for _, row in df_sorted.iterrows():
@@ -777,62 +839,78 @@ def run_monte_carlo_optimization(data, start_date, extra_cash, base_slope, base_
 
             frontier_df = pd.DataFrame(pareto_rows)
 
-            def format_buy(rules):
-                if isinstance(rules, dict):
-                    return f"N次方: 阈值={rules['buy_threshold']*100:.1f}%, N={rules['buy_n']:.2f}"
-                return " | ".join([f"跌{-t * 100:.1f}%买{r * 100:.0f}%"
-                                   for t, r in sorted(rules, key=lambda x: x[0], reverse=True)])
-
-            def format_sell(rules):
-                if isinstance(rules, dict):
-                    return f"N次方: 阈值={rules['sell_threshold']*100:.1f}%, N={rules['sell_n']:.2f}"
-                return " | ".join([f"涨{t * 100:.1f}%卖{r * 100:.0f}%"
-                                   for t, r in sorted(rules, key=lambda x: x[0])])
-
             base_cols = {
                 '风险(最大回撤)': (frontier_df['dd'] * 100).map('{:.2f}%'.format),
                 '收益(预期年化)': (frontier_df['ret'] * 100).map('{:.2f}%'.format),
                 '卡玛得分': frontier_df['calmar'].map('{:.2f}'.format),
-                '对数斜率': frontier_df['slope'].map('{:.6f}'.format),
-                '对数截距': frontier_df['icpt'].map('{:.4f}'.format),
             }
+            if not is_dynamic:
+                base_cols['对数斜率'] = frontier_df['slope'].map('{:.6f}'.format)
+                base_cols['对数截距'] = frontier_df['icpt'].map('{:.4f}'.format)
+
             if is_np_mode and 'buy_threshold' in frontier_df.columns:
                 base_cols['买入阈值'] = (frontier_df['buy_threshold'] * 100).map('{:.2f}%'.format)
                 base_cols['买入N'] = frontier_df['buy_n'].map('{:.2f}'.format)
                 base_cols['卖出阈值'] = (frontier_df['sell_threshold'] * 100).map('{:.2f}%'.format)
                 base_cols['卖出N'] = frontier_df['sell_n'].map('{:.2f}'.format)
             else:
-                base_cols['买入梯队'] = frontier_df['buy_rules'].apply(format_buy)
-                base_cols['卖出梯队'] = frontier_df['sell_rules'].apply(format_sell)
+                # 每档参数展开为独立列
+                for ti in range(1, num_buy_tiers + 1):
+                    col_t = f'buy_t{ti}'
+                    col_r = f'buy_r{ti}'
+                    if col_t in frontier_df.columns:
+                        base_cols[f'买入阈值{ti}'] = (frontier_df[col_t] * 100).map('{:.2f}%'.format)
+                    if col_r in frontier_df.columns:
+                        base_cols[f'买入比例{ti}'] = (frontier_df[col_r] * 100).map('{:.1f}%'.format)
+                for ti in range(1, num_sell_tiers + 1):
+                    col_t = f'sell_t{ti}'
+                    col_r = f'sell_r{ti}'
+                    if col_t in frontier_df.columns:
+                        base_cols[f'卖出阈值{ti}'] = (frontier_df[col_t] * 100).map('{:.2f}%'.format)
+                    if col_r in frontier_df.columns:
+                        base_cols[f'卖出比例{ti}'] = (frontier_df[col_r] * 100).map('{:.1f}%'.format)
             display_df = pd.DataFrame(base_cols)
             st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-        # ---- 回撤稳定区：回撤相近，收益递增 ----
-        st.markdown("### 📊 回撤稳定区 — 回撤相近时哪些参数提升了收益？")
-        df_samp_copy = df_samp.copy()
-        df_samp_copy['dd_bin'] = (df_samp_copy['dd'] * 200).round() / 200  # ±0.5% bins
-        dd_stable = df_samp_copy.loc[df_samp_copy.groupby('dd_bin')['ret'].idxmax()]
-        dd_stable = dd_stable.sort_values('ret', ascending=True).tail(30)
+        # ---- 回撤稳定区/收益稳定区公用列映射 ----
         dd_cols = {'dd': '最大回撤', 'ret': '年化收益', 'calmar': '卡玛'}
         if is_np_mode:
             dd_cols.update({'buy_threshold': '买入阈值', 'buy_n': '买入N', 'sell_threshold': '卖出阈值', 'sell_n': '卖出N'})
         else:
-            dd_cols.update({'slope': '斜率', '1st_buy': '首档买入'})
+            if not is_dynamic:
+                dd_cols['slope'] = '斜率'
+            for ti in range(1, num_buy_tiers + 1):
+                dd_cols[f'buy_t{ti}'] = f'买入阈值{ti}'
+                dd_cols[f'buy_r{ti}'] = f'买入比例{ti}'
+            for ti in range(1, num_sell_tiers + 1):
+                dd_cols[f'sell_t{ti}'] = f'卖出阈值{ti}'
+                dd_cols[f'sell_r{ti}'] = f'卖出比例{ti}'
+
+        def _format_stability_col(display_df_in):
+            for c in display_df_in.columns:
+                if c in ('最大回撤', '年化收益'):
+                    display_df_in[c] = display_df_in[c].map(lambda v: f"{v*100:.2f}%")
+                elif c == '卡玛':
+                    display_df_in[c] = display_df_in[c].map(lambda v: f"{v:.2f}")
+                elif '阈值' in c:
+                    display_df_in[c] = display_df_in[c].map(lambda v: f"{v*100:.2f}%")
+                elif '比例' in c:
+                    display_df_in[c] = display_df_in[c].map(lambda v: f"{v*100:.1f}%")
+                elif c in ('买入N', '卖出N'):
+                    display_df_in[c] = display_df_in[c].map(lambda v: f"{v:.2f}")
+                elif c == '斜率':
+                    display_df_in[c] = display_df_in[c].map(lambda v: f"{v:.6f}")
+            return display_df_in
+
+        # ---- 回撤稳定区：回撤相近，收益递增 ----
+        st.markdown("### 📊 回撤稳定区 — 回撤相近时哪些参数提升了收益？")
+        df_samp_copy = df_samp.copy()
+        df_samp_copy['dd_bin'] = (df_samp_copy['dd'] * 200).round() / 200
+        dd_stable = df_samp_copy.loc[df_samp_copy.groupby('dd_bin')['ret'].idxmax()]
+        dd_stable = dd_stable.sort_values('ret', ascending=True).tail(30)
         dd_display = dd_stable[[c for c in dd_cols if c in dd_stable.columns]].copy()
         dd_display.columns = [dd_cols[c] for c in dd_display.columns]
-        for c in dd_display.columns:
-            if c in ('最大回撤', '年化收益'):
-                dd_display[c] = dd_display[c].map(lambda v: f"{v*100:.2f}%")
-            elif c == '卡玛':
-                dd_display[c] = dd_display[c].map(lambda v: f"{v:.2f}")
-            elif c in ('买入阈值', '卖出阈值'):
-                dd_display[c] = dd_display[c].map(lambda v: f"{v*100:.2f}%")
-            elif c in ('买入N', '卖出N'):
-                dd_display[c] = dd_display[c].map(lambda v: f"{v:.2f}")
-            elif c == '斜率':
-                dd_display[c] = dd_display[c].map(lambda v: f"{v:.6f}")
-            elif c == '首档买入':
-                dd_display[c] = dd_display[c].map(lambda v: f"{v*100:.2f}%")
+        dd_display = _format_stability_col(dd_display)
         st.dataframe(dd_display.reset_index(drop=True), use_container_width=True, hide_index=True)
 
         # ---- 收益稳定区：收益相近，回撤递增 ----
@@ -842,19 +920,7 @@ def run_monte_carlo_optimization(data, start_date, extra_cash, base_slope, base_
         ret_stable = ret_stable.sort_values('dd', ascending=True).tail(30)
         ret_display = ret_stable[[c for c in dd_cols if c in ret_stable.columns]].copy()
         ret_display.columns = [dd_cols[c] for c in ret_display.columns]
-        for c in ret_display.columns:
-            if c in ('最大回撤', '年化收益'):
-                ret_display[c] = ret_display[c].map(lambda v: f"{v*100:.2f}%")
-            elif c == '卡玛':
-                ret_display[c] = ret_display[c].map(lambda v: f"{v:.2f}")
-            elif c in ('买入阈值', '卖出阈值'):
-                ret_display[c] = ret_display[c].map(lambda v: f"{v*100:.2f}%")
-            elif c in ('买入N', '卖出N'):
-                ret_display[c] = ret_display[c].map(lambda v: f"{v:.2f}")
-            elif c == '斜率':
-                ret_display[c] = ret_display[c].map(lambda v: f"{v:.6f}")
-            elif c == '首档买入':
-                ret_display[c] = ret_display[c].map(lambda v: f"{v*100:.2f}%")
+        ret_display = _format_stability_col(ret_display)
         st.dataframe(ret_display.reset_index(drop=True), use_container_width=True, hide_index=True)
 
     return best
@@ -878,6 +944,8 @@ if 'sell_rules_count' not in st.session_state:
     st.session_state.sell_rules_count = len(DEFAULT_SELL_RULES)
 if 'regression_mode' not in st.session_state:
     st.session_state.regression_mode = "static"
+if 'show_star_backtest_picker' not in st.session_state:
+    st.session_state.show_star_backtest_picker = False
 
 # ---------- 侧边栏：标的选择 ----------
 st.sidebar.header("标的选择")
@@ -888,7 +956,12 @@ asset_name_sel = st.sidebar.selectbox("选择标的", asset_names, index=0)
 st.sidebar.markdown("---")
 st.sidebar.subheader("或输入自定义代码")
 custom_code = st.sidebar.text_input("代码", placeholder="例如 sz399006 或 ^GSPC")
-custom_source = st.sidebar.selectbox("数据源", ["tushare (A股)", "akshare (A股)", "yfinance (全球)"], index=0)
+custom_source = st.sidebar.selectbox("数据源", [
+    "akshare_sina (A股-新浪)",
+    "akshare (A股-东方财富)",
+    "akshare_tx (A股-腾讯)",
+    "yfinance (全球)",
+], index=0)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("回归模式")
@@ -916,7 +989,14 @@ if run_primary:
     if custom_code.strip():
         sel_name = custom_code.strip()
         sel_code = custom_code.strip()
-        sel_source = "tushare" if "tushare" in custom_source else ("akshare" if "akshare" in custom_source else "yfinance")
+        if "akshare_sina" in custom_source:
+            sel_source = "akshare_sina"
+        elif "akshare_tx" in custom_source:
+            sel_source = "akshare_tx"
+        elif "akshare" in custom_source:
+            sel_source = "akshare"
+        else:
+            sel_source = "yfinance"
     else:
         sel_name = asset_name_sel
         asset_info = ASSET_MAP[asset_category][asset_name_sel]
@@ -941,7 +1021,8 @@ if st.session_state.primary_result is not None:
     # 数据表格
     format_dict = {
         '当月收盘价': '{:.3f}', '理论对数值': '{:.4f}', '理论值': '{:.2f}',
-        '百分比': '{:.2%}', '持有股票数量': '{:.4f}', '股票价值': '{:,.2f}',
+        '百分比': '{:.2%}', '滚动斜率': '{:.6f}', '滚动截距': '{:.4f}',
+        '持有股票数量': '{:.4f}', '股票价值': '{:,.2f}',
         '现金': '{:,.2f}', '仓位百分比': '{:.2%}', '总资产': '{:,.2f}',
         '累计投资': '{:.3f}', '收益': '{:,.2f}', '当月真实收益率': '{:.2%}',
         '净值指数': '{:,.2f}', '年化收益率(IRR)': '{:.2%}', '最大回撤': '{:.2%}',
@@ -963,9 +1044,25 @@ if st.session_state.primary_result is not None:
         unique_dates = sorted(data['日期'].unique())
 
         st.markdown("#### 1. 基础环境")
-        col_env1, col_env2 = st.columns(2)
-        backtest_start = col_env1.selectbox("回测起始年月", unique_dates, index=0)
-        extra_cash = col_env2.number_input("额外初始现金", value=0.0, step=1.0, format="%.1f")
+
+        # 解析可用年份和月份
+        date_series = pd.Series(unique_dates)
+        parsed_dates = pd.to_datetime(date_series)
+        available_years = sorted(parsed_dates.dt.year.unique())
+
+        col_start_y, col_start_m = st.columns(2)
+        start_year = col_start_y.selectbox("回测起始年", available_years, index=0, key="start_year")
+        start_months_mask = parsed_dates.dt.year == start_year
+        start_month_dates = date_series[start_months_mask].tolist()
+        backtest_start = col_start_m.selectbox("起始月", start_month_dates, index=0, key="start_month")
+
+        col_end_y, col_end_m = st.columns(2)
+        end_year = col_end_y.selectbox("回测截止年", available_years, index=len(available_years) - 1, key="end_year")
+        end_months_mask = parsed_dates.dt.year == end_year
+        end_month_dates = date_series[end_months_mask].tolist()
+        backtest_end = col_end_m.selectbox("截止月", end_month_dates, index=len(end_month_dates) - 1, key="end_month")
+
+        extra_cash = st.number_input("额外初始现金", value=0.0, step=1.0, format="%.1f")
 
         st.markdown("---")
         cur_reg_mode = st.session_state.regression_mode
@@ -1131,7 +1228,7 @@ if st.session_state.primary_result is not None:
             if custom_code.strip():
                 sel_name = custom_code.strip()
                 sel_code = custom_code.strip()
-                sel_source = "tushare" if "tushare" in custom_source else ("akshare" if "akshare" in custom_source else "yfinance")
+                sel_source = "akshare" if "akshare" in custom_source else "yfinance"
             else:
                 sel_name = asset_name_sel
                 asset_info = ASSET_MAP[asset_category][asset_name_sel]
@@ -1143,6 +1240,7 @@ if st.session_state.primary_result is not None:
                     custom_slope=slope_val, custom_intercept=intercept_val,
                     custom_buy_rules=buy_rules_input, custom_sell_rules=sell_rules_input,
                     backtest_start_date=backtest_start,
+                    backtest_end_date=backtest_end,
                     extra_initial_cash=extra_cash if extra_cash > 0 else 0,
                     regression_mode=cur_reg_mode, freq=st.session_state.freq,
                     buy_mode=cur_buy_mode, npower_params=npower_params_input)
@@ -1157,10 +1255,11 @@ if st.session_state.primary_result is not None:
 
         # ---- 执行蒙特卡洛寻优 ----
         if run_opt:
+            st.session_state.show_star_backtest_picker = False
             st.markdown("---")
             st.markdown("### ↓↓↓ 蒙特卡洛寻优 ↓↓↓")
             best_p = run_monte_carlo_optimization(
-                data, backtest_start,
+                data, backtest_start, backtest_end,
                 extra_cash if extra_cash > 0 else 0,
                 base_slope, base_intercept,
                 st.session_state.buy_rules_count,
@@ -1170,7 +1269,101 @@ if st.session_state.primary_result is not None:
                 buy_mode=cur_buy_mode, npower_params=npower_params_input)
             if best_p:
                 st.session_state.opt_params = best_p
-                st.info("💡 寻优参数已保存。点击下方按钮将最优参数填入面板并执行回测。")
+
+        # ---- 将寻优参数填入面板（独立于 run_opt，以免按钮点击时因 run_opt=False 被跳过）----
+        if st.session_state.opt_params is not None:
+            st.info("💡 寻优参数已保存。点击下方按钮将最优参数填入面板并执行回测。")
+            if cur_reg_mode == "dynamic":
+                # 动态回归模式：点击后显示时间范围选择器
+                if st.button("🎯 将星号策略参数带入面板并执行回测", type="primary"):
+                    st.session_state.show_star_backtest_picker = True
+                    st.rerun()
+
+                if st.session_state.show_star_backtest_picker:
+                    st.markdown("---")
+                    st.markdown("#### 📅 选择回测时间范围")
+                    star_col_sy, star_col_sm = st.columns(2)
+                    star_start_year = star_col_sy.selectbox(
+                        "回测起始年", available_years, index=0, key="star_start_year")
+                    star_start_mask = parsed_dates.dt.year == star_start_year
+                    star_start_dates = date_series[star_start_mask].tolist()
+                    star_backtest_start = star_col_sm.selectbox(
+                        "起始月", star_start_dates, index=0, key="star_start_month")
+
+                    star_col_ey, star_col_em = st.columns(2)
+                    star_end_year = star_col_ey.selectbox(
+                        "回测截止年", available_years,
+                        index=len(available_years) - 1, key="star_end_year")
+                    star_end_mask = parsed_dates.dt.year == star_end_year
+                    star_end_dates = date_series[star_end_mask].tolist()
+                    star_backtest_end = star_col_em.selectbox(
+                        "截止月", star_end_dates,
+                        index=len(star_end_dates) - 1, key="star_end_month")
+
+                    if st.button("✅ 确定 — 执行回测", type="primary", use_container_width=True):
+                        opt = st.session_state.opt_params
+                        st.markdown("---")
+                        st.markdown("### ↓↓↓ 星号策略回测结果 ↓↓↓")
+                        # 解析资产信息
+                        if custom_code.strip():
+                            sel_name_star = custom_code.strip()
+                            sel_code_star = custom_code.strip()
+                            if "akshare_sina" in custom_source:
+                                sel_source_star = "akshare_sina"
+                            elif "akshare_tx" in custom_source:
+                                sel_source_star = "akshare_tx"
+                            elif "akshare" in custom_source:
+                                sel_source_star = "akshare"
+                            else:
+                                sel_source_star = "yfinance"
+                        else:
+                            sel_name_star = asset_name_sel
+                            asset_info_star = ASSET_MAP[asset_category][asset_name_sel]
+                            sel_code_star = asset_info_star["code"]
+                            sel_source_star = asset_info_star["source"]
+
+                        # 构建参数
+                        star_buy_rules = None
+                        star_sell_rules = None
+                        star_npower_params = None
+                        star_buy_mode = opt.get('buy_mode', 'tiered')
+                        if star_buy_mode == 'npower':
+                            bp = opt['buy_rules']
+                            sp = opt['sell_rules']
+                            star_npower_params = {
+                                "buy_threshold": bp['buy_threshold'],
+                                "buy_n": bp['buy_n'],
+                                "sell_threshold": sp['sell_threshold'],
+                                "sell_n": sp['sell_n'],
+                                "min_ratio": npower_params_input.get('min_ratio', 0.01) if npower_params_input else 0.01
+                            }
+                        else:
+                            star_buy_rules = opt['buy_rules']
+                            star_sell_rules = opt['sell_rules']
+
+                        with st.spinner("正在执行星号策略回测…"):
+                            star_result = run_full_analysis(
+                                sel_name_star, sel_code_star, source=sel_source_star,
+                                custom_slope=None, custom_intercept=None,
+                                custom_buy_rules=star_buy_rules,
+                                custom_sell_rules=star_sell_rules,
+                                backtest_start_date=star_backtest_start,
+                                backtest_end_date=star_backtest_end,
+                                extra_initial_cash=extra_cash if extra_cash > 0 else 0,
+                                regression_mode="dynamic",
+                                freq=st.session_state.freq,
+                                buy_mode=star_buy_mode,
+                                npower_params=star_npower_params)
+                        if star_result is not None:
+                            s_data, _, _, s_figs = star_result
+                            s_styled = s_data.style.format(format_dict, na_rep='NA')
+                            st.dataframe(s_styled, use_container_width=True, height=400)
+                            for title, fig in s_figs:
+                                st.subheader(title)
+                                st.pyplot(fig)
+                                plt.close(fig)
+            else:
+                # 静态模式：保持原有行为
                 if st.button("🎯 将星号策略参数填入面板并执行回测", type="primary"):
                     st.rerun()
 
