@@ -1274,109 +1274,162 @@ if st.session_state.primary_result is not None:
                 mc_iters, mc_calmar, mc_b_gap, mc_s_gap,
                 regression_mode=cur_reg_mode, freq=st.session_state.freq,
                 buy_mode=cur_buy_mode_2, npower_params=npower_params_input_2)
-                
+            
+            # Persist the optimization results to session state
             if best_p:
-                if custom_code.strip():
-                    sel_name_star = custom_code.strip()
-                    sel_code_star = custom_code.strip()
-                    if "akshare_sina" in custom_source:
-                        sel_source_star = "akshare_sina"
-                    elif "akshare_tx" in custom_source:
-                        sel_source_star = "akshare_tx"
-                    elif "akshare" in custom_source:
-                        sel_source_star = "akshare"
-                    else:
-                        sel_source_star = "yfinance"
-                else:
-                    sel_name_star = asset_name_sel
-                    asset_info_star = ASSET_MAP[asset_category][asset_name_sel]
-                    sel_code_star = asset_info_star["code"]
-                    sel_source_star = asset_info_star["source"]
+                st.session_state.opt_best_p = best_p
+                st.session_state.opt_worst_p = worst_p
+                st.session_state.opt_npower_params = npower_params_input_2
 
-                # --- 1. 执行最优组参数回测 ---
+        # --- 渲染已缓存的寻优结果 ---
+        if st.session_state.get('opt_best_p') is not None:
+            best_p = st.session_state.opt_best_p
+            worst_p = st.session_state.opt_worst_p
+            saved_npower = st.session_state.opt_npower_params
+            
+            if custom_code.strip():
+                sel_name_star = custom_code.strip()
+                sel_code_star = custom_code.strip()
+                if "akshare_sina" in custom_source:
+                    sel_source_star = "akshare_sina"
+                elif "akshare_tx" in custom_source:
+                    sel_source_star = "akshare_tx"
+                elif "akshare" in custom_source:
+                    sel_source_star = "akshare"
+                else:
+                    sel_source_star = "yfinance"
+            else:
+                sel_name_star = asset_name_sel
+                asset_info_star = ASSET_MAP[asset_category][asset_name_sel]
+                sel_code_star = asset_info_star["code"]
+                sel_source_star = asset_info_star["source"]
+
+            # --- 1. 执行最优组参数回测 ---
+            st.markdown("---")
+            st.markdown("### 🏆 【最优参数组】结果验证与展示")
+            
+            s_buy_mode = best_p.get('buy_mode', 'tiered')
+            s_buy_rules = None
+            s_sell_rules = None
+            s_npower_params = None
+            
+            if s_buy_mode == 'npower':
+                s_npower_params = {
+                    "buy_threshold": best_p['buy_rules']['buy_threshold'],
+                    "buy_n": best_p['buy_rules']['buy_n'],
+                    "sell_threshold": best_p['sell_rules']['sell_threshold'],
+                    "sell_n": best_p['sell_rules']['sell_n'],
+                    "min_ratio": saved_npower.get('min_ratio', 0.01) if saved_npower else 0.01
+                }
+            else:
+                s_buy_rules = best_p['buy_rules']
+                s_sell_rules = best_p['sell_rules']
+
+            with st.spinner("正在绘制最优策略的回测曲线…"):
+                star_result = run_full_analysis(
+                    sel_name_star, sel_code_star, source=sel_source_star,
+                    custom_slope=best_p.get('slope'), custom_intercept=best_p.get('icpt'),
+                    custom_buy_rules=s_buy_rules,
+                    custom_sell_rules=s_sell_rules,
+                    backtest_start_date=backtest_start_2,
+                    backtest_end_date=backtest_end_2,
+                    extra_initial_cash=extra_cash_2 if extra_cash_2 > 0 else 0,
+                    regression_mode=cur_reg_mode,
+                    freq=st.session_state.freq,
+                    buy_mode=s_buy_mode,
+                    npower_params=s_npower_params)
+            if star_result is not None:
+                s_data, _, _, s_figs = star_result
+                s_styled = s_data.style.format(format_dict, na_rep='NA')
+                st.dataframe(s_styled, use_container_width=True, height=400)
+                for title, fig in s_figs:
+                    st.subheader(title)
+                    st.pyplot(fig)
+                    plt.close(fig)
+
+                # --- 2. 执行最差组参数回测 ---
+            if worst_p:
                 st.markdown("---")
-                st.markdown("### 🏆 【最优参数组】结果验证与展示")
+                st.markdown("### 🚫 【最差参数组】反面教材展示")
                 
-                s_buy_mode = best_p.get('buy_mode', 'tiered')
-                s_buy_rules = None
-                s_sell_rules = None
-                s_npower_params = None
+                w_buy_mode = worst_p.get('buy_mode', 'tiered')
+                w_buy_rules = None
+                w_sell_rules = None
+                w_npower_params = None
                 
-                if s_buy_mode == 'npower':
-                    s_npower_params = {
-                        "buy_threshold": best_p['buy_rules']['buy_threshold'],
-                        "buy_n": best_p['buy_rules']['buy_n'],
-                        "sell_threshold": best_p['sell_rules']['sell_threshold'],
-                        "sell_n": best_p['sell_rules']['sell_n'],
-                        "min_ratio": npower_params_input_2.get('min_ratio', 0.01) if npower_params_input_2 else 0.01
+                if w_buy_mode == 'npower':
+                    w_npower_params = {
+                        "buy_threshold": worst_p['buy_rules']['buy_threshold'],
+                        "buy_n": worst_p['buy_rules']['buy_n'],
+                        "sell_threshold": worst_p['sell_rules']['sell_threshold'],
+                        "sell_n": worst_p['sell_rules']['sell_n'],
+                        "min_ratio": saved_npower.get('min_ratio', 0.01) if saved_npower else 0.01
                     }
                 else:
-                    s_buy_rules = best_p['buy_rules']
-                    s_sell_rules = best_p['sell_rules']
+                    w_buy_rules = worst_p['buy_rules']
+                    w_sell_rules = worst_p['sell_rules']
 
-                with st.spinner("正在绘制最优策略的回测曲线…"):
-                    star_result = run_full_analysis(
+                with st.spinner("正在绘制最差策略的回测曲线…"):
+                    worst_result = run_full_analysis(
                         sel_name_star, sel_code_star, source=sel_source_star,
-                        custom_slope=best_p.get('slope'), custom_intercept=best_p.get('icpt'),
-                        custom_buy_rules=s_buy_rules,
-                        custom_sell_rules=s_sell_rules,
+                        custom_slope=worst_p.get('slope'), custom_intercept=worst_p.get('icpt'),
+                        custom_buy_rules=w_buy_rules,
+                        custom_sell_rules=w_sell_rules,
                         backtest_start_date=backtest_start_2,
                         backtest_end_date=backtest_end_2,
                         extra_initial_cash=extra_cash_2 if extra_cash_2 > 0 else 0,
                         regression_mode=cur_reg_mode,
                         freq=st.session_state.freq,
+                        buy_mode=w_buy_mode,
+                        npower_params=w_npower_params)
+                if worst_result is not None:
+                    w_data, _, _, w_figs = worst_result
+                    w_styled = w_data.style.format(format_dict, na_rep='NA')
+                    with st.expander("显示最差组合的收益数据和图表"):
+                        st.dataframe(w_styled, use_container_width=True, height=400)
+                        for title, fig in w_figs:
+                            st.subheader(title)
+                            st.pyplot(fig)
+                            plt.close(fig)
+
+            # --- 3. 跨期验证区域 (Out-of-sample) ---
+            st.markdown("---")
+            st.markdown("### 📅 跨期验证：使用最优参数在其他时间段回测")
+            st.caption("选择一个不同于寻优期的时间范围，验证最优参数是否仍然有效。")
+            
+            oos_col_sy, oos_col_sm = st.columns(2)
+            oos_start_year = oos_col_sy.selectbox("验证起始年", available_years, index=0, key="oos_start_year")
+            oos_start_months_mask = parsed_dates.dt.year == oos_start_year
+            oos_start_month_dates = date_series[oos_start_months_mask].tolist()
+            oos_backtest_start = oos_col_sm.selectbox("起始月", oos_start_month_dates, index=0, key="oos_start_month")
+
+            oos_col_ey, oos_col_em = st.columns(2)
+            oos_end_year = oos_col_ey.selectbox("验证截止年", available_years, index=len(available_years) - 1, key="oos_end_year")
+            oos_end_months_mask = parsed_dates.dt.year == oos_end_year
+            oos_end_month_dates = date_series[oos_end_months_mask].tolist()
+            oos_backtest_end = oos_col_em.selectbox("截止月", oos_end_month_dates, index=len(oos_end_month_dates) - 1, key="oos_end_month")
+            
+            if st.button("▶️ 执行跨期验证", type="primary", use_container_width=True, key="btn_run_oos"):
+                st.markdown("#### ↓↓↓ 验证期回测结果 ↓↓↓")
+                with st.spinner(f"正在使用最优参数在这段区间 ({oos_backtest_start} 到 {oos_backtest_end}) 进行回测…"):
+                    oos_result = run_full_analysis(
+                        sel_name_star, sel_code_star, source=sel_source_star,
+                        custom_slope=best_p.get('slope'), custom_intercept=best_p.get('icpt'),
+                        custom_buy_rules=s_buy_rules,
+                        custom_sell_rules=s_sell_rules,
+                        backtest_start_date=oos_backtest_start,
+                        backtest_end_date=oos_backtest_end,
+                        extra_initial_cash=extra_cash_2 if extra_cash_2 > 0 else 0,
+                        regression_mode=cur_reg_mode,
+                        freq=st.session_state.freq,
                         buy_mode=s_buy_mode,
                         npower_params=s_npower_params)
-                if star_result is not None:
-                    s_data, _, _, s_figs = star_result
-                    s_styled = s_data.style.format(format_dict, na_rep='NA')
-                    st.dataframe(s_styled, use_container_width=True, height=400)
-                    for title, fig in s_figs:
+                if oos_result is not None:
+                    o_data, _, _, o_figs = oos_result
+                    o_styled = o_data.style.format(format_dict, na_rep='NA')
+                    st.dataframe(o_styled, use_container_width=True, height=400)
+                    for title, fig in o_figs:
                         st.subheader(title)
                         st.pyplot(fig)
                         plt.close(fig)
 
-                # --- 2. 执行最差组参数回测 ---
-                if worst_p:
-                    st.markdown("---")
-                    st.markdown("### 🚫 【最差参数组】反面教材展示")
-                    
-                    w_buy_mode = worst_p.get('buy_mode', 'tiered')
-                    w_buy_rules = None
-                    w_sell_rules = None
-                    w_npower_params = None
-                    
-                    if w_buy_mode == 'npower':
-                        w_npower_params = {
-                            "buy_threshold": worst_p['buy_rules']['buy_threshold'],
-                            "buy_n": worst_p['buy_rules']['buy_n'],
-                            "sell_threshold": worst_p['sell_rules']['sell_threshold'],
-                            "sell_n": worst_p['sell_rules']['sell_n'],
-                            "min_ratio": npower_params_input_2.get('min_ratio', 0.01) if npower_params_input_2 else 0.01
-                        }
-                    else:
-                        w_buy_rules = worst_p['buy_rules']
-                        w_sell_rules = worst_p['sell_rules']
-
-                    with st.spinner("正在绘制最差策略的回测曲线…"):
-                        worst_result = run_full_analysis(
-                            sel_name_star, sel_code_star, source=sel_source_star,
-                            custom_slope=worst_p.get('slope'), custom_intercept=worst_p.get('icpt'),
-                            custom_buy_rules=w_buy_rules,
-                            custom_sell_rules=w_sell_rules,
-                            backtest_start_date=backtest_start_2,
-                            backtest_end_date=backtest_end_2,
-                            extra_initial_cash=extra_cash_2 if extra_cash_2 > 0 else 0,
-                            regression_mode=cur_reg_mode,
-                            freq=st.session_state.freq,
-                            buy_mode=w_buy_mode,
-                            npower_params=w_npower_params)
-                    if worst_result is not None:
-                        w_data, _, _, w_figs = worst_result
-                        w_styled = w_data.style.format(format_dict, na_rep='NA')
-                        with st.expander("显示最差组合的收益数据和图表"):
-                            st.dataframe(w_styled, use_container_width=True, height=400)
-                            for title, fig in w_figs:
-                                st.subheader(title)
-                                st.pyplot(fig)
-                                plt.close(fig)
