@@ -217,7 +217,7 @@ def run_full_analysis(index_name, index_code, source="akshare",
 
     results_lists = {k: [] for k in [
         'shares', 'cash', 'stock_value', 'total_assets', 'cumulative_investment',
-        'profit', 'actual_monthly_return', 'annual_irr', 'max_drawdown',
+        'profit', 'actual_monthly_return', 'annual_irr', 'annual_twr', 'max_drawdown',
         'volatility', 'net_value_index']}
     shares_held, cash_held, cumulative_investment = 0.0, 0.0, 0.0
     net_value_index, peak_net_value_index = 1000.0, 1000.0
@@ -232,8 +232,8 @@ def run_full_analysis(index_name, index_code, source="akshare",
         if backtest_start_date and current_date < backtest_start_date:
             for key in results_lists:
                 results_lists[key].append(
-                    0 if key not in ['annual_irr', 'net_value_index']
-                    else (np.nan if key == 'annual_irr' else 1000.0))
+                    0 if key not in ['annual_irr', 'annual_twr', 'net_value_index']
+                    else (np.nan if key in ['annual_irr', 'annual_twr'] else 1000.0))
             continue
 
         close_price = row['当月收盘价']
@@ -312,6 +312,7 @@ def run_full_analysis(index_name, index_code, source="akshare",
         max_drawdown = min(current_max_drawdown, drawdown)
 
         annual_irr = np.nan
+        annual_twr = np.nan
         num_periods = i - start_idx_for_irr + 1
         if num_periods >= ppy:
             cash_flows = [-1.0] * num_periods
@@ -323,10 +324,13 @@ def run_full_analysis(index_name, index_code, source="akshare",
                     annual_irr = (1 + period_irr) ** ppy - 1
             except (ValueError, TypeError):
                 pass
+            
+            if num_periods > 0:
+                annual_twr = (net_value_index / 1000.0) ** (float(ppy) / num_periods) - 1.0
 
         for key, val in zip(results_lists.keys(), [
             shares_held, cash_held, stock_value, total_assets, cumulative_investment,
-            profit, actual_monthly_return, annual_irr, max_drawdown, volatility,
+            profit, actual_monthly_return, annual_irr, annual_twr, max_drawdown, volatility,
             net_value_index]):
             results_lists[key].append(val)
 
@@ -343,6 +347,7 @@ def run_full_analysis(index_name, index_code, source="akshare",
     processed_data['当月真实收益率'] = results_lists['actual_monthly_return']
     processed_data['净值指数'] = results_lists['net_value_index']
     processed_data['年化收益率(IRR)'] = results_lists['annual_irr']
+    processed_data['年化收益率(TWR)'] = results_lists['annual_twr']
     processed_data['最大回撤'] = results_lists['max_drawdown']
     processed_data['年化波动率'] = results_lists['volatility']
 
@@ -506,6 +511,7 @@ def run_monte_carlo_optimization(data, start_date, end_date, extra_cash, base_sl
     start_time = time.time()
 
     best_target_ret, best_target_params = -9999.0, None
+    worst_target_ret, worst_target_params = 9999.0, None
     fallback_calmar, fallback_params = -9999.0, None
     sampled_results = []
     progress_bar = st.progress(0, text="寻优进度: 0%")
@@ -676,6 +682,10 @@ def run_monte_carlo_optimization(data, start_date, end_date, extra_cash, base_sl
             if ann_ret > best_target_ret:
                 best_target_ret = ann_ret
                 best_target_params = params_dict
+        
+        if ann_ret < worst_target_ret:
+            worst_target_ret = ann_ret
+            worst_target_params = params_dict
 
         if calmar > fallback_calmar:
             fallback_calmar = calmar
@@ -689,9 +699,10 @@ def run_monte_carlo_optimization(data, start_date, end_date, extra_cash, base_sl
     st.success(f"寻优完成！总耗时: {elapsed:.2f} 秒。")
 
     best = best_target_params if best_target_params is not None else fallback_params
+    worst = worst_target_params
     if best is None:
         st.error("未能找到任何有效策略参数。")
-        return None
+        return None, None
 
     title_msg = (f"🏆 满足卡玛底线(>={target_calmar}) 的【最高收益】组合 🏆"
                  if best_target_params
@@ -923,7 +934,7 @@ def run_monte_carlo_optimization(data, start_date, end_date, extra_cash, base_sl
         ret_display = _format_stability_col(ret_display)
         st.dataframe(ret_display.reset_index(drop=True), use_container_width=True, hide_index=True)
 
-    return best
+    return best, worst
 
 
 # ===================================================================
@@ -1025,7 +1036,7 @@ if st.session_state.primary_result is not None:
         '持有股票数量': '{:.4f}', '股票价值': '{:,.2f}',
         '现金': '{:,.2f}', '仓位百分比': '{:.2%}', '总资产': '{:,.2f}',
         '累计投资': '{:.3f}', '收益': '{:,.2f}', '当月真实收益率': '{:.2%}',
-        '净值指数': '{:,.2f}', '年化收益率(IRR)': '{:.2%}', '最大回撤': '{:.2%}',
+        '净值指数': '{:,.2f}', '年化收益率(IRR)': '{:.2%}', '年化收益率(TWR)': '{:.2%}', '最大回撤': '{:.2%}',
         '年化波动率': '{:.2%}',
     }
     styled_df = data.style.format(format_dict, na_rep='NA')
@@ -1038,197 +1049,141 @@ if st.session_state.primary_result is not None:
         plt.close(fig)
 
     # ============================================================
-    # 策略实验室（展开面板）
+    # 策略实验室（分离版本）
     # ============================================================
-    with st.expander("🧠 策略实验室：自定义回测 & 高维防过拟合寻优", expanded=False):
-        unique_dates = sorted(data['日期'].unique())
+    st.markdown("---")
+    st.markdown("## 🧠 策略实验室")
+    
+    tab1, tab2 = st.tabs(["🧩 单次自定义策略回测", "🚀 蒙特卡洛参数高维寻优"])
+    
+    unique_dates = sorted(data['日期'].unique())
+    date_series = pd.Series(unique_dates)
+    parsed_dates = pd.to_datetime(date_series)
+    available_years = sorted(parsed_dates.dt.year.unique())
 
-        st.markdown("#### 1. 基础环境")
+    # ------------------------------------------------------------------
+    # TAB 1: 单次自定义策略回测
+    # ------------------------------------------------------------------
+    with tab1:
+        st.markdown("### 1. 基础环境设置")
+        t1_col_sy, t1_col_sm = st.columns(2)
+        start_year_1 = t1_col_sy.selectbox("回测起始年", available_years, index=0, key="t1_start_year")
+        start_months_mask_1 = parsed_dates.dt.year == start_year_1
+        start_month_dates_1 = date_series[start_months_mask_1].tolist()
+        backtest_start_1 = t1_col_sm.selectbox("起始月", start_month_dates_1, index=0, key="t1_start_month")
 
-        # 解析可用年份和月份
-        date_series = pd.Series(unique_dates)
-        parsed_dates = pd.to_datetime(date_series)
-        available_years = sorted(parsed_dates.dt.year.unique())
+        t1_col_ey, t1_col_em = st.columns(2)
+        end_year_1 = t1_col_ey.selectbox("回测截止年", available_years, index=len(available_years) - 1, key="t1_end_year")
+        end_months_mask_1 = parsed_dates.dt.year == end_year_1
+        end_month_dates_1 = date_series[end_months_mask_1].tolist()
+        backtest_end_1 = t1_col_em.selectbox("截止月", end_month_dates_1, index=len(end_month_dates_1) - 1, key="t1_end_month")
 
-        col_start_y, col_start_m = st.columns(2)
-        start_year = col_start_y.selectbox("回测起始年", available_years, index=0, key="start_year")
-        start_months_mask = parsed_dates.dt.year == start_year
-        start_month_dates = date_series[start_months_mask].tolist()
-        backtest_start = col_start_m.selectbox("起始月", start_month_dates, index=0, key="start_month")
-
-        col_end_y, col_end_m = st.columns(2)
-        end_year = col_end_y.selectbox("回测截止年", available_years, index=len(available_years) - 1, key="end_year")
-        end_months_mask = parsed_dates.dt.year == end_year
-        end_month_dates = date_series[end_months_mask].tolist()
-        backtest_end = col_end_m.selectbox("截止月", end_month_dates, index=len(end_month_dates) - 1, key="end_month")
-
-        extra_cash = st.number_input("额外初始现金", value=0.0, step=1.0, format="%.1f")
+        extra_cash_1 = st.number_input("额外初始现金", value=0.0, step=1.0, format="%.1f", key="t1_cash")
 
         st.markdown("---")
         cur_reg_mode = st.session_state.regression_mode
-        opt = st.session_state.opt_params
-
+        
         if cur_reg_mode == "static":
-            st.markdown("#### 2. 拟合线微调 (静态模式)")
-            col_sl, col_ic = st.columns(2)
-            default_slope = opt['slope'] if opt else base_slope
-            default_intercept = opt['icpt'] if opt else base_intercept
-            slope_val = col_sl.number_input("对数斜率", value=default_slope, step=0.0001, format="%.6f")
-            intercept_val = col_ic.number_input("对数截距", value=default_intercept, step=0.1, format="%.4f")
+            st.markdown("### 2. 拟合线微调 (静态模式)")
+            t1_col_sl, t1_col_ic = st.columns(2)
+            slope_val = t1_col_sl.number_input("对数斜率", value=base_slope, step=0.0001, format="%.6f", key="t1_slope")
+            intercept_val = t1_col_ic.number_input("对数截距", value=base_intercept, step=0.1, format="%.4f", key="t1_icpt")
         else:
-            st.markdown("#### 2. 拟合线 (动态模式 — 由数据自动决定)")
+            st.markdown("### 2. 拟合线 (动态模式 — 由数据自动决定)")
             st.info("动态回归模式下，斜率和截距由扩展窗口拟合自动计算，无需手动调节。")
             slope_val = None
             intercept_val = None
 
         st.markdown("---")
-        st.markdown("#### 3. 定义规则")
+        st.markdown("### 3. 定义交易规则")
 
-        buy_mode_choice = st.radio(
+        buy_mode_choice_1 = st.radio(
             "买入模式", ["梯队法", "N次方曲线法"], index=0, horizontal=True,
-            help="梯队法：多档阈值+比例。N次方曲线法：ratio = min(1, (|偏差|/阈值)^N)"
+            help="梯队法：多档阈值+比例。N次方曲线法：ratio = min(1, (|偏差|/阈值)^N)",
+            key="t1_buy_mode"
         )
-        cur_buy_mode = "npower" if "N次方" in buy_mode_choice else "tiered"
+        cur_buy_mode_1 = "npower" if "N次方" in buy_mode_choice_1 else "tiered"
 
-        # 决定卖出规则的默认值 (仅梯队模式可复用 opt 参数)
-        if opt and opt.get('buy_mode', 'tiered') == 'tiered' and isinstance(opt.get('sell_rules'), list):
-            default_sell = sorted(opt['sell_rules'], key=lambda x: x[0])
-            if 'sell_rules_count' in st.session_state:
-                st.session_state.sell_rules_count = len(default_sell)
-        else:
-            default_sell = DEFAULT_SELL_RULES
+        npower_params_input_1 = None
+        buy_rules_input_1 = None
+        sell_rules_input_1 = None
 
-        # --- N次方曲线买卖 ---
-        npower_params_input = None
-        buy_rules_input = None
-        sell_rules_input = None
-        if cur_buy_mode == "npower":
+        if cur_buy_mode_1 == "npower":
             st.markdown("**N次方曲线**: `ratio = min(1, (|偏差| / 阈值) ^ N)`")
             st.markdown("**买入参数**")
             col_np1, col_np2 = st.columns(2)
-            if opt and opt.get('buy_mode') == 'npower':
-                def_bt = opt['buy_rules']['buy_threshold'] * 100
-                def_bn = opt['buy_rules']['buy_n']
-                def_st = opt['sell_rules']['sell_threshold'] * 100
-                def_sn = opt['sell_rules']['sell_n']
-            else:
-                def_bt, def_bn = 4.0, 2.0
-                def_st, def_sn = 4.0, 2.0
-            np_bt = col_np1.number_input("买入阈值 (%)", value=def_bt, step=0.5, format="%.1f")
-            np_bn = col_np2.number_input("买入 N次方", value=def_bn, step=0.1, format="%.2f")
+            np_bt_1 = col_np1.number_input("买入阈值 (%)", value=4.0, step=0.5, format="%.1f", key="t1_np_bt")
+            np_bn_1 = col_np2.number_input("买入 N次方", value=2.0, step=0.1, format="%.2f", key="t1_np_bn")
             st.markdown("**卖出参数**")
             col_np3, col_np4 = st.columns(2)
-            np_st = col_np3.number_input("卖出阈值 (%)", value=def_st, step=0.5, format="%.1f")
-            np_sn = col_np4.number_input("卖出 N次方", value=def_sn, step=0.1, format="%.2f")
+            np_st_1 = col_np3.number_input("卖出阈值 (%)", value=4.0, step=0.5, format="%.1f", key="t1_np_st")
+            np_sn_1 = col_np4.number_input("卖出 N次方", value=2.0, step=0.1, format="%.2f", key="t1_np_sn")
             st.markdown("**最低交易比例**")
-            np_min_ratio = st.number_input(
-                "最低交易比例 (%)，低于此比例的买卖自动忽略",
-                value=1.0, step=0.5, min_value=0.0, format="%.1f",
-                help="当计算出的买入/卖出比例低于此值时，该期不进行操作。")
-            npower_params_input = {
-                "buy_threshold": np_bt / 100.0, "buy_n": np_bn,
-                "sell_threshold": np_st / 100.0, "sell_n": np_sn,
-                "min_ratio": np_min_ratio / 100.0
+            np_min_ratio_1 = st.number_input("最低交易比例 (%)，低于此比例的买卖自动忽略", value=1.0, step=0.5, min_value=0.0, format="%.1f", key="t1_np_min")
+            npower_params_input_1 = {
+                "buy_threshold": np_bt_1 / 100.0, "buy_n": np_bn_1,
+                "sell_threshold": np_st_1 / 100.0, "sell_n": np_sn_1,
+                "min_ratio": np_min_ratio_1 / 100.0
             }
         else:
-            # --- 梯队买入 ---
-            if opt and opt.get('buy_mode', 'tiered') == 'tiered' and isinstance(opt.get('buy_rules'), list):
-                default_buy = sorted(opt['buy_rules'], key=lambda x: x[0], reverse=True)
-                if 'buy_rules_count' in st.session_state:
-                    st.session_state.buy_rules_count = len(default_buy)
-            else:
-                default_buy = DEFAULT_BUY_RULES
-
+            default_buy = DEFAULT_BUY_RULES
+            default_sell = DEFAULT_SELL_RULES
             st.markdown("**买入规则** (对数阈值需为负数)")
             buy_col1, buy_col2 = st.columns([4, 1])
             with buy_col2:
-                if st.button("➕ 加一档买入"):
+                if st.button("➕ 加一档买入", key="t1_btn_add_buy"):
                     st.session_state.buy_rules_count += 1
                     st.rerun()
-                if st.button("➖ 减一档买入") and st.session_state.buy_rules_count > 1:
+                if st.button("➖ 减一档买入", key="t1_btn_sub_buy") and st.session_state.buy_rules_count > 1:
                     st.session_state.buy_rules_count -= 1
                     st.rerun()
 
-            buy_rules_input = []
+            buy_rules_input_1 = []
             with buy_col1:
                 for idx in range(st.session_state.buy_rules_count):
                     c1, c2 = st.columns(2)
                     default_t = default_buy[idx][0] * 100 if idx < len(default_buy) else -5.0
                     default_r = default_buy[idx][1] * 100 if idx < len(default_buy) else 20.0
-                    t = c1.number_input(f"买入阈值 % (档{idx + 1})", value=default_t,
-                                        step=0.5, format="%.1f", key=f"buy_t_{idx}")
-                    r = c2.number_input(f"买入比例 % (档{idx + 1})", value=default_r,
-                                        step=5.0, format="%.1f", key=f"buy_r_{idx}")
-                    buy_rules_input.append((t / 100.0, r / 100.0))
+                    t = c1.number_input(f"买入阈值 % (档{idx + 1})", value=default_t, step=0.5, format="%.1f", key=f"t1_buy_t_{idx}")
+                    r = c2.number_input(f"买入比例 % (档{idx + 1})", value=default_r, step=5.0, format="%.1f", key=f"t1_buy_r_{idx}")
+                    buy_rules_input_1.append((t / 100.0, r / 100.0))
 
-            # 卖出规则 (仅梯队模式)
             st.markdown("**卖出规则** (对数阈值需为正数)")
             sell_col1, sell_col2 = st.columns([4, 1])
             with sell_col2:
-                if st.button("➕ 加一档卖出"):
+                if st.button("➕ 加一档卖出", key="t1_btn_add_sell"):
                     st.session_state.sell_rules_count += 1
                     st.rerun()
-                if st.button("➖ 减一档卖出") and st.session_state.sell_rules_count > 1:
+                if st.button("➖ 减一档卖出", key="t1_btn_sub_sell") and st.session_state.sell_rules_count > 1:
                     st.session_state.sell_rules_count -= 1
                     st.rerun()
 
-            sell_rules_input = []
+            sell_rules_input_1 = []
             with sell_col1:
                 for idx in range(st.session_state.sell_rules_count):
                     c1, c2 = st.columns(2)
                     default_t = default_sell[idx][0] * 100 if idx < len(default_sell) else 5.0
                     default_r = default_sell[idx][1] * 100 if idx < len(default_sell) else 20.0
-                    t = c1.number_input(f"卖出阈值 % (档{idx + 1})", value=default_t,
-                                        step=0.5, format="%.1f", key=f"sell_t_{idx}")
-                    r = c2.number_input(f"卖出比例 % (档{idx + 1})", value=default_r,
-                                        step=5.0, format="%.1f", key=f"sell_r_{idx}")
-                    sell_rules_input.append((t / 100.0, r / 100.0))
+                    t = c1.number_input(f"卖出阈值 % (档{idx + 1})", value=default_t, step=0.5, format="%.1f", key=f"t1_sell_t_{idx}")
+                    r = c2.number_input(f"卖出比例 % (档{idx + 1})", value=default_r, step=5.0, format="%.1f", key=f"t1_sell_r_{idx}")
+                    sell_rules_input_1.append((t / 100.0, r / 100.0))
 
         st.markdown("---")
+        run_custom = st.button("🔄 运行单次自定义回测", type="primary", use_container_width=True, key="t1_btn_run")
 
-        # 自定义回测按钮
-        run_custom = st.button("🔄 运行单次自定义回测", type="primary", use_container_width=True)
-
-        st.markdown("---")
-        st.markdown("#### 4. 蒙特卡洛寻优")
-
-        if cur_reg_mode == "dynamic":
-            st.caption("ℹ️ 动态回归模式：拟合始终从历史最早数据开始，即使回测起始日期较晚。斜率/截距无需搜索。")
-
-        p_min = data['百分比'].dropna().min() * 100
-        p_max = data['百分比'].dropna().max() * 100
-        rec_b_gap = max(0.5, round(abs(p_min) / (len(DEFAULT_BUY_RULES) * 2.0), 1))
-        rec_s_gap = max(0.5, round(abs(p_max) / (len(DEFAULT_SELL_RULES) * 2.0), 1))
-
-        col_mc1, col_mc2 = st.columns(2)
-        mc_iters = col_mc1.number_input("蒙特卡洛次数", value=20000, step=5000, min_value=100)
-        mc_calmar = col_mc2.number_input("底线卡玛(>0)", value=1.0, step=0.1, format="%.1f")
-        col_mc3, col_mc4 = st.columns(2)
-        mc_b_gap = col_mc3.number_input("买档最小间距 (%)", value=rec_b_gap, step=0.1, format="%.1f",
-                                         disabled=(cur_buy_mode == "npower"))
-        mc_s_gap = col_mc4.number_input("卖档最小间距 (%)", value=rec_s_gap, step=0.1, format="%.1f",
-                                         disabled=(cur_buy_mode == "npower"))
-
-        # 自动计算维度
-        if cur_buy_mode == "npower":
-            mc_buy_dims = 2
-        else:
-            mc_buy_dims = st.session_state.buy_rules_count * 2
-        mc_sell_dims = st.session_state.sell_rules_count * 2
-        mc_slope_dims = 0 if cur_reg_mode == "dynamic" else 2
-        mc_total_dims = mc_slope_dims + mc_buy_dims + mc_sell_dims
-
-        opt_label = f"🚀 启动蒙特卡洛 {mc_total_dims}维寻优"
-        run_opt = st.button(opt_label, type="secondary", use_container_width=True)
-
-        # ---- 执行自定义回测 ----
         if run_custom:
-            st.markdown("---")
-            st.markdown("### ↓↓↓ 自定义参数单次回测结果 ↓↓↓")
+            st.markdown("### ↓↓↓ 回测结果 ↓↓↓")
             if custom_code.strip():
                 sel_name = custom_code.strip()
                 sel_code = custom_code.strip()
-                sel_source = "akshare" if "akshare" in custom_source else "yfinance"
+                if "akshare_sina" in custom_source:
+                    sel_source = "akshare_sina"
+                elif "akshare_tx" in custom_source:
+                    sel_source = "akshare_tx"
+                elif "akshare" in custom_source:
+                    sel_source = "akshare"
+                else:
+                    sel_source = "yfinance"
             else:
                 sel_name = asset_name_sel
                 asset_info = ASSET_MAP[asset_category][asset_name_sel]
@@ -1238,12 +1193,11 @@ if st.session_state.primary_result is not None:
                 custom_result = run_full_analysis(
                     sel_name, sel_code, source=sel_source,
                     custom_slope=slope_val, custom_intercept=intercept_val,
-                    custom_buy_rules=buy_rules_input, custom_sell_rules=sell_rules_input,
-                    backtest_start_date=backtest_start,
-                    backtest_end_date=backtest_end,
-                    extra_initial_cash=extra_cash if extra_cash > 0 else 0,
+                    custom_buy_rules=buy_rules_input_1, custom_sell_rules=sell_rules_input_1,
+                    backtest_start_date=backtest_start_1, backtest_end_date=backtest_end_1,
+                    extra_initial_cash=extra_cash_1 if extra_cash_1 > 0 else 0,
                     regression_mode=cur_reg_mode, freq=st.session_state.freq,
-                    buy_mode=cur_buy_mode, npower_params=npower_params_input)
+                    buy_mode=cur_buy_mode_1, npower_params=npower_params_input_1)
             if custom_result is not None:
                 c_data, _, _, c_figs = custom_result
                 c_styled = c_data.style.format(format_dict, na_rep='NA')
@@ -1253,117 +1207,176 @@ if st.session_state.primary_result is not None:
                     st.pyplot(fig)
                     plt.close(fig)
 
-        # ---- 执行蒙特卡洛寻优 ----
+    # ------------------------------------------------------------------
+    # TAB 2: 蒙特卡洛参数高维寻优
+    # ------------------------------------------------------------------
+    with tab2:
+        st.markdown("### 1. 寻优时间范围")
+        t2_col_sy, t2_col_sm = st.columns(2)
+        start_year_2 = t2_col_sy.selectbox("寻优起始年", available_years, index=0, key="t2_start_year")
+        start_months_mask_2 = parsed_dates.dt.year == start_year_2
+        start_month_dates_2 = date_series[start_months_mask_2].tolist()
+        backtest_start_2 = t2_col_sm.selectbox("起始月", start_month_dates_2, index=0, key="t2_start_month")
+
+        t2_col_ey, t2_col_em = st.columns(2)
+        end_year_2 = t2_col_ey.selectbox("寻优截止年", available_years, index=len(available_years) - 1, key="t2_end_year")
+        end_months_mask_2 = parsed_dates.dt.year == end_year_2
+        end_month_dates_2 = date_series[end_months_mask_2].tolist()
+        backtest_end_2 = t2_col_em.selectbox("截止月", end_month_dates_2, index=len(end_month_dates_2) - 1, key="t2_end_month")
+
+        extra_cash_2 = st.number_input("额外初始现金", value=0.0, step=1.0, format="%.1f", key="t2_cash")
+
+        if cur_reg_mode == "dynamic":
+            st.caption("ℹ️ 动态回归模式：拟合始终从历史最早数据开始，无需搜索斜率/截距。")
+
+        st.markdown("---")
+        st.markdown("### 2. 寻优配置参数")
+        
+        buy_mode_choice_2 = st.radio("寻优买入模式", ["梯队法", "N次方曲线法"], index=0, horizontal=True, key="t2_buy_mode")
+        cur_buy_mode_2 = "npower" if "N次方" in buy_mode_choice_2 else "tiered"
+
+        p_min = data['百分比'].dropna().min() * 100
+        p_max = data['百分比'].dropna().max() * 100
+        rec_b_gap = max(0.5, round(abs(p_min) / (len(DEFAULT_BUY_RULES) * 2.0), 1))
+        rec_s_gap = max(0.5, round(abs(p_max) / (len(DEFAULT_SELL_RULES) * 2.0), 1))
+
+        col_mc1, col_mc2 = st.columns(2)
+        mc_iters = col_mc1.number_input("蒙特卡洛次数", value=20000, step=5000, min_value=100, key="t2_mc_iters")
+        mc_calmar = col_mc2.number_input("底线卡玛(>0)", value=1.0, step=0.1, format="%.1f", key="t2_mc_cal")
+        col_mc3, col_mc4 = st.columns(2)
+        mc_b_gap = col_mc3.number_input("买档最小间距 (%)", value=rec_b_gap, step=0.1, format="%.1f", disabled=(cur_buy_mode_2 == "npower"), key="t2_mc_bgap")
+        mc_s_gap = col_mc4.number_input("卖档最小间距 (%)", value=rec_s_gap, step=0.1, format="%.1f", disabled=(cur_buy_mode_2 == "npower"), key="t2_mc_sgap")
+
+        npower_params_input_2 = None
+        if cur_buy_mode_2 == "npower":
+            np_min_ratio_2 = st.number_input("寻优时最低交易比例 (%)", value=1.0, step=0.5, min_value=0.0, format="%.1f", key="t2_np_min")
+            npower_params_input_2 = {"min_ratio": np_min_ratio_2 / 100.0}
+
+        if cur_buy_mode_2 == "npower":
+            mc_buy_dims = 2
+        else:
+            mc_buy_dims = st.session_state.buy_rules_count * 2
+        mc_sell_dims = st.session_state.sell_rules_count * 2
+        mc_slope_dims = 0 if cur_reg_mode == "dynamic" else 2
+        mc_total_dims = mc_slope_dims + mc_buy_dims + mc_sell_dims
+
+        opt_label = f"🚀 启动蒙特卡洛 {mc_total_dims}维寻优"
+        run_opt = st.button(opt_label, type="primary", use_container_width=True, key="t2_btn_run")
+
         if run_opt:
-            st.session_state.show_star_backtest_picker = False
             st.markdown("---")
-            st.markdown("### ↓↓↓ 蒙特卡洛寻优 ↓↓↓")
-            best_p = run_monte_carlo_optimization(
-                data, backtest_start, backtest_end,
-                extra_cash if extra_cash > 0 else 0,
+            best_p, worst_p = run_monte_carlo_optimization(
+                data, backtest_start_2, backtest_end_2,
+                extra_cash_2 if extra_cash_2 > 0 else 0,
                 base_slope, base_intercept,
                 st.session_state.buy_rules_count,
                 st.session_state.sell_rules_count,
                 mc_iters, mc_calmar, mc_b_gap, mc_s_gap,
                 regression_mode=cur_reg_mode, freq=st.session_state.freq,
-                buy_mode=cur_buy_mode, npower_params=npower_params_input)
+                buy_mode=cur_buy_mode_2, npower_params=npower_params_input_2)
+                
             if best_p:
-                st.session_state.opt_params = best_p
+                if custom_code.strip():
+                    sel_name_star = custom_code.strip()
+                    sel_code_star = custom_code.strip()
+                    if "akshare_sina" in custom_source:
+                        sel_source_star = "akshare_sina"
+                    elif "akshare_tx" in custom_source:
+                        sel_source_star = "akshare_tx"
+                    elif "akshare" in custom_source:
+                        sel_source_star = "akshare"
+                    else:
+                        sel_source_star = "yfinance"
+                else:
+                    sel_name_star = asset_name_sel
+                    asset_info_star = ASSET_MAP[asset_category][asset_name_sel]
+                    sel_code_star = asset_info_star["code"]
+                    sel_source_star = asset_info_star["source"]
 
-        # ---- 将寻优参数填入面板（独立于 run_opt，以免按钮点击时因 run_opt=False 被跳过）----
-        if st.session_state.opt_params is not None:
-            st.info("💡 寻优参数已保存。点击下方按钮将最优参数填入面板并执行回测。")
-            if cur_reg_mode == "dynamic":
-                # 动态回归模式：点击后显示时间范围选择器
-                if st.button("🎯 将星号策略参数带入面板并执行回测", type="primary"):
-                    st.session_state.show_star_backtest_picker = True
-                    st.rerun()
+                # --- 1. 执行最优组参数回测 ---
+                st.markdown("---")
+                st.markdown("### 🏆 【最优参数组】结果验证与展示")
+                
+                s_buy_mode = best_p.get('buy_mode', 'tiered')
+                s_buy_rules = None
+                s_sell_rules = None
+                s_npower_params = None
+                
+                if s_buy_mode == 'npower':
+                    s_npower_params = {
+                        "buy_threshold": best_p['buy_rules']['buy_threshold'],
+                        "buy_n": best_p['buy_rules']['buy_n'],
+                        "sell_threshold": best_p['sell_rules']['sell_threshold'],
+                        "sell_n": best_p['sell_rules']['sell_n'],
+                        "min_ratio": npower_params_input_2.get('min_ratio', 0.01) if npower_params_input_2 else 0.01
+                    }
+                else:
+                    s_buy_rules = best_p['buy_rules']
+                    s_sell_rules = best_p['sell_rules']
 
-                if st.session_state.show_star_backtest_picker:
+                with st.spinner("正在绘制最优策略的回测曲线…"):
+                    star_result = run_full_analysis(
+                        sel_name_star, sel_code_star, source=sel_source_star,
+                        custom_slope=best_p.get('slope'), custom_intercept=best_p.get('icpt'),
+                        custom_buy_rules=s_buy_rules,
+                        custom_sell_rules=s_sell_rules,
+                        backtest_start_date=backtest_start_2,
+                        backtest_end_date=backtest_end_2,
+                        extra_initial_cash=extra_cash_2 if extra_cash_2 > 0 else 0,
+                        regression_mode=cur_reg_mode,
+                        freq=st.session_state.freq,
+                        buy_mode=s_buy_mode,
+                        npower_params=s_npower_params)
+                if star_result is not None:
+                    s_data, _, _, s_figs = star_result
+                    s_styled = s_data.style.format(format_dict, na_rep='NA')
+                    st.dataframe(s_styled, use_container_width=True, height=400)
+                    for title, fig in s_figs:
+                        st.subheader(title)
+                        st.pyplot(fig)
+                        plt.close(fig)
+
+                # --- 2. 执行最差组参数回测 ---
+                if worst_p:
                     st.markdown("---")
-                    st.markdown("#### 📅 选择回测时间范围")
-                    star_col_sy, star_col_sm = st.columns(2)
-                    star_start_year = star_col_sy.selectbox(
-                        "回测起始年", available_years, index=0, key="star_start_year")
-                    star_start_mask = parsed_dates.dt.year == star_start_year
-                    star_start_dates = date_series[star_start_mask].tolist()
-                    star_backtest_start = star_col_sm.selectbox(
-                        "起始月", star_start_dates, index=0, key="star_start_month")
+                    st.markdown("### 🚫 【最差参数组】反面教材展示")
+                    
+                    w_buy_mode = worst_p.get('buy_mode', 'tiered')
+                    w_buy_rules = None
+                    w_sell_rules = None
+                    w_npower_params = None
+                    
+                    if w_buy_mode == 'npower':
+                        w_npower_params = {
+                            "buy_threshold": worst_p['buy_rules']['buy_threshold'],
+                            "buy_n": worst_p['buy_rules']['buy_n'],
+                            "sell_threshold": worst_p['sell_rules']['sell_threshold'],
+                            "sell_n": worst_p['sell_rules']['sell_n'],
+                            "min_ratio": npower_params_input_2.get('min_ratio', 0.01) if npower_params_input_2 else 0.01
+                        }
+                    else:
+                        w_buy_rules = worst_p['buy_rules']
+                        w_sell_rules = worst_p['sell_rules']
 
-                    star_col_ey, star_col_em = st.columns(2)
-                    star_end_year = star_col_ey.selectbox(
-                        "回测截止年", available_years,
-                        index=len(available_years) - 1, key="star_end_year")
-                    star_end_mask = parsed_dates.dt.year == star_end_year
-                    star_end_dates = date_series[star_end_mask].tolist()
-                    star_backtest_end = star_col_em.selectbox(
-                        "截止月", star_end_dates,
-                        index=len(star_end_dates) - 1, key="star_end_month")
-
-                    if st.button("✅ 确定 — 执行回测", type="primary", use_container_width=True):
-                        opt = st.session_state.opt_params
-                        st.markdown("---")
-                        st.markdown("### ↓↓↓ 星号策略回测结果 ↓↓↓")
-                        # 解析资产信息
-                        if custom_code.strip():
-                            sel_name_star = custom_code.strip()
-                            sel_code_star = custom_code.strip()
-                            if "akshare_sina" in custom_source:
-                                sel_source_star = "akshare_sina"
-                            elif "akshare_tx" in custom_source:
-                                sel_source_star = "akshare_tx"
-                            elif "akshare" in custom_source:
-                                sel_source_star = "akshare"
-                            else:
-                                sel_source_star = "yfinance"
-                        else:
-                            sel_name_star = asset_name_sel
-                            asset_info_star = ASSET_MAP[asset_category][asset_name_sel]
-                            sel_code_star = asset_info_star["code"]
-                            sel_source_star = asset_info_star["source"]
-
-                        # 构建参数
-                        star_buy_rules = None
-                        star_sell_rules = None
-                        star_npower_params = None
-                        star_buy_mode = opt.get('buy_mode', 'tiered')
-                        if star_buy_mode == 'npower':
-                            bp = opt['buy_rules']
-                            sp = opt['sell_rules']
-                            star_npower_params = {
-                                "buy_threshold": bp['buy_threshold'],
-                                "buy_n": bp['buy_n'],
-                                "sell_threshold": sp['sell_threshold'],
-                                "sell_n": sp['sell_n'],
-                                "min_ratio": npower_params_input.get('min_ratio', 0.01) if npower_params_input else 0.01
-                            }
-                        else:
-                            star_buy_rules = opt['buy_rules']
-                            star_sell_rules = opt['sell_rules']
-
-                        with st.spinner("正在执行星号策略回测…"):
-                            star_result = run_full_analysis(
-                                sel_name_star, sel_code_star, source=sel_source_star,
-                                custom_slope=None, custom_intercept=None,
-                                custom_buy_rules=star_buy_rules,
-                                custom_sell_rules=star_sell_rules,
-                                backtest_start_date=star_backtest_start,
-                                backtest_end_date=star_backtest_end,
-                                extra_initial_cash=extra_cash if extra_cash > 0 else 0,
-                                regression_mode="dynamic",
-                                freq=st.session_state.freq,
-                                buy_mode=star_buy_mode,
-                                npower_params=star_npower_params)
-                        if star_result is not None:
-                            s_data, _, _, s_figs = star_result
-                            s_styled = s_data.style.format(format_dict, na_rep='NA')
-                            st.dataframe(s_styled, use_container_width=True, height=400)
-                            for title, fig in s_figs:
+                    with st.spinner("正在绘制最差策略的回测曲线…"):
+                        worst_result = run_full_analysis(
+                            sel_name_star, sel_code_star, source=sel_source_star,
+                            custom_slope=worst_p.get('slope'), custom_intercept=worst_p.get('icpt'),
+                            custom_buy_rules=w_buy_rules,
+                            custom_sell_rules=w_sell_rules,
+                            backtest_start_date=backtest_start_2,
+                            backtest_end_date=backtest_end_2,
+                            extra_initial_cash=extra_cash_2 if extra_cash_2 > 0 else 0,
+                            regression_mode=cur_reg_mode,
+                            freq=st.session_state.freq,
+                            buy_mode=w_buy_mode,
+                            npower_params=w_npower_params)
+                    if worst_result is not None:
+                        w_data, _, _, w_figs = worst_result
+                        w_styled = w_data.style.format(format_dict, na_rep='NA')
+                        with st.expander("显示最差组合的收益数据和图表"):
+                            st.dataframe(w_styled, use_container_width=True, height=400)
+                            for title, fig in w_figs:
                                 st.subheader(title)
                                 st.pyplot(fig)
                                 plt.close(fig)
-            else:
-                # 静态模式：保持原有行为
-                if st.button("🎯 将星号策略参数填入面板并执行回测", type="primary"):
-                    st.rerun()
-
