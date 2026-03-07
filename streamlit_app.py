@@ -164,7 +164,7 @@ def run_full_analysis(index_name, index_code, source="akshare",
                       custom_slope=None, custom_intercept=None,
                       custom_buy_rules=None, custom_sell_rules=None,
                       backtest_start_date=None, backtest_end_date=None,
-                      extra_initial_cash=0,
+                      initial_capital=10000.0, monthly_investment=1000.0,
                       regression_mode="static", freq="monthly",
                       buy_mode="tiered", npower_params=None):
     """运行完整分析，返回 (processed_data, slope, intercept, figures_list)。"""
@@ -243,15 +243,15 @@ def run_full_analysis(index_name, index_code, source="akshare",
         if not trading_started:
             trading_started = True
             actual_monthly_return = 0.0
-            cash_held += (1.0 + extra_initial_cash)
-            cumulative_investment += (1.0 + extra_initial_cash)
+            cash_held += initial_capital
+            cumulative_investment += initial_capital
         else:
             actual_monthly_return = (
                 (assets_before_sip - last_month_assets) / last_month_assets
                 if last_month_assets > 0 else 0.0)
             net_value_index *= (1.0 + actual_monthly_return)
-            cash_held += 1.0
-            cumulative_investment += 1.0
+            cash_held += monthly_investment
+            cumulative_investment += monthly_investment
 
         active_returns.append(actual_monthly_return)
 
@@ -315,8 +315,8 @@ def run_full_analysis(index_name, index_code, source="akshare",
         annual_twr = np.nan
         num_periods = i - start_idx_for_irr + 1
         if num_periods >= ppy:
-            cash_flows = [-1.0] * num_periods
-            cash_flows[0] -= extra_initial_cash
+            cash_flows = [-monthly_investment] * num_periods
+            cash_flows[0] = -initial_capital
             cash_flows.append(total_assets)
             try:
                 period_irr = npf.irr(cash_flows)
@@ -474,7 +474,7 @@ def run_full_analysis(index_name, index_code, source="akshare",
     return processed_data, slope, intercept, figures
 
 
-def run_monte_carlo_optimization(data, start_date, end_date, extra_cash, base_slope, base_icpt,
+def run_monte_carlo_optimization(data, start_date, end_date, initial_cap, monthly_inv, base_slope, base_icpt,
                                   num_buy_tiers, num_sell_tiers, num_iters,
                                   target_calmar, min_b_gap, min_s_gap,
                                   regression_mode="static", freq="monthly",
@@ -583,7 +583,7 @@ def run_monte_carlo_optimization(data, start_date, end_date, extra_cash, base_sl
             exec_buy = sorted(list(zip(-rand_b_t_abs[i], rand_b_r[i])), key=lambda x: x[0])
             buy_trig = exec_buy[-1][0]
 
-        cash = 1.0 + extra_cash
+        cash = initial_cap
         shares = 0.0
         net_val = 1.0
         peak_nv = 1.0
@@ -601,7 +601,7 @@ def run_monte_carlo_optimization(data, start_date, end_date, extra_cash, base_sl
                 ret = ((assets_before_sip - last_assets) / last_assets
                        if last_assets > 0 else 0.0)
                 net_val *= (1.0 + ret)
-                cash += 1.0
+                cash += monthly_inv
 
             # 买入
             if is_npower:
@@ -1078,7 +1078,9 @@ if st.session_state.primary_result is not None:
         end_month_dates_1 = date_series[end_months_mask_1].tolist()
         backtest_end_1 = t1_col_em.selectbox("截止月", end_month_dates_1, index=len(end_month_dates_1) - 1, key="t1_end_month")
 
-        extra_cash_1 = st.number_input("额外初始现金", value=0.0, step=1.0, format="%.1f", key="t1_cash")
+        t1_col_cap, t1_col_inv = st.columns(2)
+        initial_capital_1 = t1_col_cap.number_input("初始资金", value=10000.0, step=1000.0, format="%.2f", key="t1_init_cap")
+        monthly_investment_1 = t1_col_inv.number_input("每月定投资金", value=1000.0, step=100.0, format="%.2f", key="t1_monthly_inv")
 
         st.markdown("---")
         cur_reg_mode = st.session_state.regression_mode
@@ -1195,7 +1197,7 @@ if st.session_state.primary_result is not None:
                     custom_slope=slope_val, custom_intercept=intercept_val,
                     custom_buy_rules=buy_rules_input_1, custom_sell_rules=sell_rules_input_1,
                     backtest_start_date=backtest_start_1, backtest_end_date=backtest_end_1,
-                    extra_initial_cash=extra_cash_1 if extra_cash_1 > 0 else 0,
+                    initial_capital=initial_capital_1, monthly_investment=monthly_investment_1,
                     regression_mode=cur_reg_mode, freq=st.session_state.freq,
                     buy_mode=cur_buy_mode_1, npower_params=npower_params_input_1)
             if custom_result is not None:
@@ -1224,7 +1226,9 @@ if st.session_state.primary_result is not None:
         end_month_dates_2 = date_series[end_months_mask_2].tolist()
         backtest_end_2 = t2_col_em.selectbox("截止月", end_month_dates_2, index=len(end_month_dates_2) - 1, key="t2_end_month")
 
-        extra_cash_2 = st.number_input("额外初始现金", value=0.0, step=1.0, format="%.1f", key="t2_cash")
+        t2_col_cap, t2_col_inv = st.columns(2)
+        initial_capital_2 = t2_col_cap.number_input("初始资金", value=10000.0, step=1000.0, format="%.2f", key="t2_init_cap")
+        monthly_investment_2 = t2_col_inv.number_input("每月定投资金", value=1000.0, step=100.0, format="%.2f", key="t2_monthly_inv")
 
         if cur_reg_mode == "dynamic":
             st.caption("ℹ️ 动态回归模式：拟合始终从历史最早数据开始，无需搜索斜率/截距。")
@@ -1267,7 +1271,7 @@ if st.session_state.primary_result is not None:
             st.markdown("---")
             best_p, worst_p = run_monte_carlo_optimization(
                 data, backtest_start_2, backtest_end_2,
-                extra_cash_2 if extra_cash_2 > 0 else 0,
+                initial_capital_2, monthly_investment_2,
                 base_slope, base_intercept,
                 st.session_state.buy_rules_count,
                 st.session_state.sell_rules_count,
@@ -1333,7 +1337,7 @@ if st.session_state.primary_result is not None:
                     custom_sell_rules=s_sell_rules,
                     backtest_start_date=backtest_start_2,
                     backtest_end_date=backtest_end_2,
-                    extra_initial_cash=extra_cash_2 if extra_cash_2 > 0 else 0,
+                    initial_capital=initial_capital_2, monthly_investment=monthly_investment_2,
                     regression_mode=cur_reg_mode,
                     freq=st.session_state.freq,
                     buy_mode=s_buy_mode,
@@ -1377,7 +1381,7 @@ if st.session_state.primary_result is not None:
                         custom_sell_rules=w_sell_rules,
                         backtest_start_date=backtest_start_2,
                         backtest_end_date=backtest_end_2,
-                        extra_initial_cash=extra_cash_2 if extra_cash_2 > 0 else 0,
+                        initial_capital=initial_capital_2, monthly_investment=monthly_investment_2,
                         regression_mode=cur_reg_mode,
                         freq=st.session_state.freq,
                         buy_mode=w_buy_mode,
@@ -1409,6 +1413,10 @@ if st.session_state.primary_result is not None:
             oos_end_month_dates = date_series[oos_end_months_mask].tolist()
             oos_backtest_end = oos_col_em.selectbox("截止月", oos_end_month_dates, index=len(oos_end_month_dates) - 1, key="oos_end_month")
             
+            oos_col_cap, oos_col_inv = st.columns(2)
+            oos_initial_capital = oos_col_cap.number_input("验证期初始资金", value=initial_capital_2, step=1000.0, format="%.2f", key="oos_init_cap")
+            oos_monthly_investment = oos_col_inv.number_input("验证期每月定投资金", value=monthly_investment_2, step=100.0, format="%.2f", key="oos_monthly_inv")
+
             if st.button("▶️ 执行跨期验证", type="primary", use_container_width=True, key="btn_run_oos"):
                 st.markdown("#### ↓↓↓ 验证期回测结果 ↓↓↓")
                 with st.spinner(f"正在使用最优参数在这段区间 ({oos_backtest_start} 到 {oos_backtest_end}) 进行回测…"):
@@ -1419,7 +1427,7 @@ if st.session_state.primary_result is not None:
                         custom_sell_rules=s_sell_rules,
                         backtest_start_date=oos_backtest_start,
                         backtest_end_date=oos_backtest_end,
-                        extra_initial_cash=extra_cash_2 if extra_cash_2 > 0 else 0,
+                        initial_capital=oos_initial_capital, monthly_investment=oos_monthly_investment,
                         regression_mode=cur_reg_mode,
                         freq=st.session_state.freq,
                         buy_mode=s_buy_mode,
