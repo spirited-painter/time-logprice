@@ -363,8 +363,11 @@ def run_full_analysis(index_name, index_code, source="akshare",
              label='Exponential Trendline (Theory)', color='red', linestyle='--', linewidth=2)
     ax1.set_title(f'{index_code} Actual Price vs Exponential Trend & Position %', fontsize=18)
     ax1.set_xlabel('Date', fontsize=12)
-    ax1.set_ylabel('Index Points', color='blue', fontsize=12)
+    ax1.set_ylabel('Index Points (Log Scale)', color='blue', fontsize=12)
     ax1.tick_params(axis='y', labelcolor='blue')
+    ax1.set_yscale('log')
+    from matplotlib.ticker import ScalarFormatter, FuncFormatter
+    ax1.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y:g}'))
 
     ax1_pos = ax1.twinx()
     ax1_pos.plot(dates_for_plot, processed_data['仓位百分比'],
@@ -408,7 +411,6 @@ def run_full_analysis(index_name, index_code, source="akshare",
     # 图 3: 策略 vs 指数对比
     fig3, ax3 = plt.subplots(figsize=(16, 8))
     color1, color2 = 'dodgerblue', 'crimson'
-    ax4 = ax3.twinx()
     start_idx = processed_data[
         processed_data['日期'] == backtest_start_date].index[0] if backtest_start_date else 0
 
@@ -419,36 +421,28 @@ def run_full_analysis(index_name, index_code, source="akshare",
         base_price = price_series.iloc[start_idx]
         base_net_value = net_value_series.iloc[start_idx]
 
-        price_pct_change = ((price_series / base_price).astype(float) - 1.0
-                            if base_price > 0 else pd.Series(0, index=price_series.index))
-        price_pct_change.iloc[:start_idx] = np.nan
-        net_value_pct_change = ((net_value_series / base_net_value).astype(float) - 1.0
-                                if base_net_value > 0 else pd.Series(0, index=net_value_series.index))
-        net_value_pct_change.iloc[:start_idx] = np.nan
+        price_to_plot = price_series.copy()
+        price_to_plot.iloc[:start_idx] = np.nan
+        
+        strategy_mapped_price = (net_value_series / base_net_value) * base_price
+        strategy_mapped_price.iloc[:start_idx] = np.nan
 
-        ax3.plot(dates_for_plot, price_pct_change, color=color1,
-                 label=f'{index_code} (Rebased)', linewidth=2, alpha=0.8)
-        ax4.plot(dates_for_plot, net_value_pct_change, color=color2,
-                 label='Strategy Net Value (Rebased)', linewidth=2)
-        y_min = min(price_pct_change.min(), net_value_pct_change.min())
-        y_max = max(price_pct_change.max(), net_value_pct_change.max())
-        margin = (y_max - y_min) * 0.05
-        ax3.set_ylim(y_min - margin, y_max + margin)
-        ax4.set_ylim(y_min - margin, y_max + margin)
-        ax3.yaxis.set_major_formatter(PercentFormatter(1.0))
-        ax4.yaxis.set_major_formatter(PercentFormatter(1.0))
+        ax3.plot(dates_for_plot, price_to_plot, color=color1,
+                 label=f'{index_code} (Actual Price)', linewidth=2, alpha=0.8)
+        ax3.plot(dates_for_plot, strategy_mapped_price, color=color2,
+                 label='Strategy Net Value (Mapped to Index)', linewidth=2)
+        
+        ax3.set_yscale('log')
+        from matplotlib.ticker import FuncFormatter
+        ax3.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y:g}'))
+        
         ax3.set_xlabel('Date', fontsize=12)
-        ax3.set_ylabel('Price Return Since Start (%)', color=color1, fontsize=12)
-        ax4.set_ylabel('Strategy Return Since Start (%)', color=color2, fontsize=12)
-        ax3.tick_params(axis='y', labelcolor=color1)
-        ax4.tick_params(axis='y', labelcolor=color2)
+        ax3.set_ylabel('Index Points (Log Scale)', fontsize=12)
         ax3.set_title(
-            f'Performance Comparison (Rebased to '
+            f'Performance Comparison (Starting from {base_price:.2f} at '
             f'{backtest_start_date if backtest_start_date else processed_data["日期"].iloc[0]})',
             fontsize=18)
-        lines1, labels1 = ax3.get_legend_handles_labels()
-        lines2, labels2 = ax4.get_legend_handles_labels()
-        ax4.legend(lines1 + lines2, labels1 + labels2, loc='upper left', fontsize=12)
+        ax3.legend(loc='upper left', fontsize=12)
         ax3.xaxis.set_major_locator(mdates.YearLocator())
         ax3.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
         ax3.xaxis.set_minor_locator(mdates.MonthLocator())
@@ -1239,6 +1233,14 @@ if st.session_state.primary_result is not None:
         buy_mode_choice_2 = st.radio("寻优买入模式", ["梯队法", "N次方曲线法"], index=0, horizontal=True, key="t2_buy_mode")
         cur_buy_mode_2 = "npower" if "N次方" in buy_mode_choice_2 else "tiered"
 
+        col_t2_tiers1, col_t2_tiers2 = st.columns(2)
+        if cur_buy_mode_2 == "tiered":
+            mc_buy_tiers = col_t2_tiers1.number_input("买入档位数量", value=st.session_state.buy_rules_count, step=1, min_value=1, key="t2_buy_tiers")
+            mc_sell_tiers = col_t2_tiers2.number_input("卖出档位数量", value=st.session_state.sell_rules_count, step=1, min_value=1, key="t2_sell_tiers")
+        else:
+            mc_buy_tiers = 1
+            mc_sell_tiers = 1
+
         p_min = data['百分比'].dropna().min() * 100
         p_max = data['百分比'].dropna().max() * 100
         rec_b_gap = max(0.5, round(abs(p_min) / (len(DEFAULT_BUY_RULES) * 2.0), 1))
@@ -1259,8 +1261,8 @@ if st.session_state.primary_result is not None:
         if cur_buy_mode_2 == "npower":
             mc_buy_dims = 2
         else:
-            mc_buy_dims = st.session_state.buy_rules_count * 2
-        mc_sell_dims = st.session_state.sell_rules_count * 2
+            mc_buy_dims = mc_buy_tiers * 2
+        mc_sell_dims = mc_sell_tiers * 2
         mc_slope_dims = 0 if cur_reg_mode == "dynamic" else 2
         mc_total_dims = mc_slope_dims + mc_buy_dims + mc_sell_dims
 
@@ -1273,8 +1275,8 @@ if st.session_state.primary_result is not None:
                 data, backtest_start_2, backtest_end_2,
                 initial_capital_2, monthly_investment_2,
                 base_slope, base_intercept,
-                st.session_state.buy_rules_count,
-                st.session_state.sell_rules_count,
+                mc_buy_tiers,
+                mc_sell_tiers,
                 mc_iters, mc_calmar, mc_b_gap, mc_s_gap,
                 regression_mode=cur_reg_mode, freq=st.session_state.freq,
                 buy_mode=cur_buy_mode_2, npower_params=npower_params_input_2)
