@@ -650,27 +650,42 @@ def run_monte_carlo_optimization(data, start_date, end_date, initial_cap, monthl
         ann_ret = net_val ** (float(ppy) / num_periods) - 1.0
         base_calmar = ann_ret / abs(max_dd) if max_dd < 0 else (ann_ret * 10 if ann_ret > 0 else 0)
 
-        # HHI Overfit Penalty
+        # CV (Coefficient of Variation) Overfit Penalty / Smoothness Bonus
         enable_hhi_penalty = npower_params.get("enable_hhi", False) if npower_params else False
         if enable_hhi_penalty:
             target_months = npower_params.get("hhi_target_months", 12.0)
             penalty_strength = npower_params.get("hhi_penalty_strength", 0.5)
 
-            target_hhi = 1.0 / max(1.0, target_months)
-            
-            tot_buy = sum(buy_spends)
-            hhi_buy = sum((s / tot_buy) ** 2 for s in buy_spends) if tot_buy > 0 else 1.0
-            
-            tot_sell = sum(sell_solds)
-            hhi_sell = sum((s / tot_sell) ** 2 for s in sell_solds) if tot_sell > 0 else 1.0
-            
-            avg_hhi = (hhi_buy + hhi_sell) / 2.0
-            
-            if avg_hhi > target_hhi:
-                excess_ratio = min(1.0, (avg_hhi - target_hhi) / (1.0 - target_hhi))
-                penalty_multiplier = 1.0 - (penalty_strength * excess_ratio)
+            def calc_cv(trades_list):
+                if len(trades_list) < 2:
+                    return 2.0  # High penalty if fewer than 2 trades
+                mean_val = np.mean(trades_list)
+                if mean_val == 0:
+                    return 2.0
+                std_val = np.std(trades_list)
+                return std_val / mean_val
+
+            cv_buy = calc_cv(buy_spends) if buy_spends else 2.0
+            cv_sell = calc_cv(sell_solds) if sell_solds else 2.0
+            avg_cv = (cv_buy + cv_sell) / 2.0
+
+            # 理想的均匀分布或正态建仓 CV 应当较低（例如 < 0.8）
+            # 极度集中的一把梭哈，CV 会非常高（> 1.5）
+            if avg_cv < 0.8 and (len(buy_spends) >= target_months * 0.5):
+                # 额外奖励：平滑度极高且建仓期足够长，给予最高 20% 卡玛分数的加成
+                bonus = min(0.2, (0.8 - avg_cv) * 0.5)
+                calmar = base_calmar * (1.0 + bonus)
+            elif avg_cv > 1.2:
+                # 惩罚：集中买入/卖出，方差极大
+                # 超过 1.2 开始惩罚，假设 2.5 为极端恶劣
+                excess_cv = min(1.0, (avg_cv - 1.2) / 1.3)
+                penalty_multiplier = 1.0 - (penalty_strength * excess_cv)
+                # 额外考量建仓月份数，如果总数极低（例如只有1-2个月），一律施加最高惩罚
+                if len(buy_spends) < 3 or len(sell_solds) < 3:
+                     penalty_multiplier = 1.0 - penalty_strength
                 calmar = base_calmar * penalty_multiplier
             else:
+                # 不奖不惩
                 calmar = base_calmar
         else:
             calmar = base_calmar
@@ -1297,12 +1312,12 @@ if st.session_state.primary_result is not None:
             npower_params_input_2["min_ratio"] = np_min_ratio_2 / 100.0
             
         st.markdown("---")
-        st.markdown("### 🛡️ 防过拟合惩罚配置 (HHI集中度惩罚)")
-        st.caption("避免算法找到“单月全仓抄底”的极端参数，鼓励在市场极值期平稳建仓/平仓。")
+        st.markdown("### 🛡️ 防过拟合惩罚配置 (变异系数CV惩罚)")
+        st.caption("基于“均匀/正态分布”思想：考量每次买入/卖出资金的方差(差异度)。如果单月梭哈，方差极大，会大幅扣减卡玛。如果平滑建仓(如每个月大致等额)，给予加分。")
         col_hhi1, col_hhi2, col_hhi3 = st.columns(3)
-        enable_hhi = col_hhi1.checkbox("启用集中度惩罚", value=True, key="t2_en_hhi", help="若开启，1-2个月内急速建仓的策略将受到卡玛降级惩罚。")
-        hhi_target_months = col_hhi2.number_input("目标建仓期 (月)", value=12, step=1, min_value=1, key="t2_hhi_months", help="期望在一轮跌势中耗时几个月买满。推荐 12-18 个月。")
-        hhi_penalty_strength = col_hhi3.number_input("惩罚力度 (0~1)", value=0.5, step=0.1, min_value=0.0, max_value=1.0, key="t2_hhi_str", help="0.5表示最极端情况下，卡玛得分减半。")
+        enable_hhi = col_hhi1.checkbox("启用平滑度约束", value=True, key="t2_en_hhi", help="若开启，方差极大的梭哈策略受罚，平滑持续建仓的策略获得最高20%卡玛加分。")
+        hhi_target_months = col_hhi2.number_input("期望最少建仓期 (月)", value=12, step=1, min_value=1, key="t2_hhi_months", help="除了资金平滑外，总建仓月数不能低于此值的50%，且极端集中(如2个月内)直接最高惩罚。")
+        hhi_penalty_strength = col_hhi3.number_input("惩罚力度乘数 (0~1)", value=0.5, step=0.1, min_value=0.0, max_value=1.0, key="t2_hhi_str", help="0.5表示最极端情况下，卡玛得分减半。")
         
         npower_params_input_2["enable_hhi"] = enable_hhi
         npower_params_input_2["hhi_target_months"] = float(hhi_target_months)
