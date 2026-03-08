@@ -472,7 +472,8 @@ def run_monte_carlo_optimization(data, start_date, end_date, initial_cap, monthl
                                   num_buy_tiers, num_sell_tiers, num_iters,
                                   target_calmar, min_b_gap, min_s_gap,
                                   regression_mode="static", freq="monthly",
-                                  buy_mode="tiered", npower_params=None):
+                                  buy_mode="tiered", npower_params=None,
+                                  buy_ratio_bounds=None, sell_ratio_bounds=None):
     ppy = FREQ_CONFIG[freq]["periods_per_year"]
     start_idx = data[data['日期'] == start_date].index[0] if start_date else 0
     if end_date:
@@ -538,15 +539,33 @@ def run_monte_carlo_optimization(data, start_date, end_date, initial_cap, monthl
         rand_np_sn = np.random.uniform(0.5, 5.0, num_iters)
         rand_np_st = np.random.uniform(0.01, max(0.02, max_s_height), num_iters)
     else:
+        # Buy bounds
         b_gap_val = min_b_gap / 100.0
         rand_b_t_abs = generate_monotonic_matrix(num_iters, num_buy_tiers, b_gap_val, max_b_depth, b_gap_val)
-        rand_b_r = generate_monotonic_matrix(num_iters, num_buy_tiers, 0.05, 1.0, 0.05)
-        rand_b_r = np.clip(rand_b_r, 0.05, 1.0)
+        
+        # Apply custom tier ratio bounds for buys if provided
+        rand_b_r = np.zeros((num_iters, num_buy_tiers))
+        if buy_ratio_bounds and len(buy_ratio_bounds) == num_buy_tiers:
+            for t in range(num_buy_tiers):
+                b_min, b_max = buy_ratio_bounds[t]
+                rand_b_r[:, t] = np.random.uniform(b_min, b_max, num_iters)
+        else:
+            rand_b_r = generate_monotonic_matrix(num_iters, num_buy_tiers, 0.05, 1.0, 0.05)
+            rand_b_r = np.clip(rand_b_r, 0.05, 1.0)
 
+        # Sell bounds
         s_gap_val = min_s_gap / 100.0
         rand_s_t = generate_monotonic_matrix(num_iters, num_sell_tiers, s_gap_val, max_s_height, s_gap_val)
-        rand_s_r = generate_monotonic_matrix(num_iters, num_sell_tiers, 0.05, 1.0, 0.05)
-        rand_s_r = np.clip(rand_s_r, 0.05, 1.0)
+
+        # Apply custom tier ratio bounds for sells if provided
+        rand_s_r = np.zeros((num_iters, num_sell_tiers))
+        if sell_ratio_bounds and len(sell_ratio_bounds) == num_sell_tiers:
+            for t in range(num_sell_tiers):
+                s_min, s_max = sell_ratio_bounds[t]
+                rand_s_r[:, t] = np.random.uniform(s_min, s_max, num_iters)
+        else:
+            rand_s_r = generate_monotonic_matrix(num_iters, num_sell_tiers, 0.05, 1.0, 0.05)
+            rand_s_r = np.clip(rand_s_r, 0.05, 1.0)
 
     for i in range(num_iters):
         if i % max(1, num_iters // 100) == 0:
@@ -1290,9 +1309,39 @@ if st.session_state.primary_result is not None:
         if cur_buy_mode_2 == "tiered":
             mc_buy_tiers = col_t2_tiers1.number_input("买入档位数量", value=st.session_state.buy_rules_count, step=1, min_value=1, key="t2_buy_tiers")
             mc_sell_tiers = col_t2_tiers2.number_input("卖出档位数量", value=st.session_state.sell_rules_count, step=1, min_value=1, key="t2_sell_tiers")
+            
+            st.markdown("**(可选) 为每一档分配允许动用资金/仓位的上下限区间**")
+            # Default fallback for ratio bounds
+            default_buy_bounds = [(0.10, 0.15), (0.25, 0.30), (0.45, 1.0)]
+            default_sell_bounds = [(0.20, 0.30), (0.40, 0.60), (0.80, 1.0)]
+            
+            mc_buy_ratio_bounds = []
+            if mc_buy_tiers > 0:
+                with st.expander("自定义买入各档资金比例约束", expanded=False):
+                    for ti in range(mc_buy_tiers):
+                        def_min = default_buy_bounds[ti][0] * 100 if ti < len(default_buy_bounds) else 50.0
+                        def_max = default_buy_bounds[ti][1] * 100 if ti < len(default_buy_bounds) else 100.0
+                        c1, c2 = st.columns(2)
+                        b_min = c1.number_input(f"买入档{ti+1} 最小比例(%)", value=def_min, step=5.0, min_value=0.0, max_value=100.0, key=f"t2_b_min_{ti}")
+                        b_max = c2.number_input(f"买入档{ti+1} 最大比例(%)", value=max(def_max, b_min), step=5.0, min_value=b_min, max_value=100.0, key=f"t2_b_max_{ti}")
+                        mc_buy_ratio_bounds.append((b_min / 100.0, b_max / 100.0))
+            
+            mc_sell_ratio_bounds = []
+            if mc_sell_tiers > 0:
+                with st.expander("自定义卖出各档仓位比例约束", expanded=False):
+                    for ti in range(mc_sell_tiers):
+                        def_min = default_sell_bounds[ti][0] * 100 if ti < len(default_sell_bounds) else 50.0
+                        def_max = default_sell_bounds[ti][1] * 100 if ti < len(default_sell_bounds) else 100.0
+                        c1, c2 = st.columns(2)
+                        s_min = c1.number_input(f"卖出档{ti+1} 最小比例(%)", value=def_min, step=5.0, min_value=0.0, max_value=100.0, key=f"t2_s_min_{ti}")
+                        s_max = c2.number_input(f"卖出档{ti+1} 最大比例(%)", value=max(def_max, s_min), step=5.0, min_value=s_min, max_value=100.0, key=f"t2_s_max_{ti}")
+                        mc_sell_ratio_bounds.append((s_min / 100.0, s_max / 100.0))
+
         else:
             mc_buy_tiers = 1
             mc_sell_tiers = 1
+            mc_buy_ratio_bounds = None
+            mc_sell_ratio_bounds = None
 
         p_min = data['百分比'].dropna().min() * 100
         p_max = data['百分比'].dropna().max() * 100
@@ -1344,7 +1393,8 @@ if st.session_state.primary_result is not None:
                 mc_sell_tiers,
                 mc_iters, mc_calmar, mc_b_gap, mc_s_gap,
                 regression_mode=cur_reg_mode, freq=st.session_state.freq,
-                buy_mode=cur_buy_mode_2, npower_params=npower_params_input_2)
+                buy_mode=cur_buy_mode_2, npower_params=npower_params_input_2,
+                buy_ratio_bounds=mc_buy_ratio_bounds, sell_ratio_bounds=mc_sell_ratio_bounds)
             
             # Persist the optimization results to session state
             if best_p:
