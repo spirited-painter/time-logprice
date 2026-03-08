@@ -587,6 +587,10 @@ def run_monte_carlo_optimization(data, start_date, end_date, initial_cap, monthl
             sell_trig = exec_sell[-1][0]
         is_first = True
 
+        # HHI Tracking variables
+        buy_spends = []
+        sell_solds = []
+
         for pct_val, price in zip(test_pct, close_prices):
             assets_before_sip = shares * price + cash
             if is_first:
@@ -603,6 +607,7 @@ def run_monte_carlo_optimization(data, start_date, end_date, initial_cap, monthl
                     ratio = min(1.0, (abs(pct_val) / cur_np_bt) ** cur_np_bn)
                     if ratio >= cur_np_min_ratio:
                         spend = cash * ratio
+                        buy_spends.append(spend)
                         shares += spend / price
                         cash -= spend
             else:
@@ -610,6 +615,7 @@ def run_monte_carlo_optimization(data, start_date, end_date, initial_cap, monthl
                     for thresh, ratio in exec_buy:
                         if pct_val <= thresh:
                             spend = cash * ratio
+                            buy_spends.append(spend)
                             shares += spend / price
                             cash -= spend
                             break
@@ -620,6 +626,7 @@ def run_monte_carlo_optimization(data, start_date, end_date, initial_cap, monthl
                     ratio = min(1.0, (pct_val / cur_np_st) ** cur_np_sn)
                     if ratio >= cur_np_min_ratio:
                         sold = shares * ratio
+                        sell_solds.append(sold)
                         cash += sold * price
                         shares -= sold
             else:
@@ -627,6 +634,7 @@ def run_monte_carlo_optimization(data, start_date, end_date, initial_cap, monthl
                     for thresh, ratio in exec_sell:
                         if pct_val >= thresh:
                             sold = shares * ratio
+                            sell_solds.append(sold)
                             cash += sold * price
                             shares -= sold
                             break
@@ -640,7 +648,32 @@ def run_monte_carlo_optimization(data, start_date, end_date, initial_cap, monthl
                 max_dd = dd
 
         ann_ret = net_val ** (float(ppy) / num_periods) - 1.0
-        calmar = ann_ret / abs(max_dd) if max_dd < 0 else (ann_ret * 10 if ann_ret > 0 else 0)
+        base_calmar = ann_ret / abs(max_dd) if max_dd < 0 else (ann_ret * 10 if ann_ret > 0 else 0)
+
+        # HHI Overfit Penalty
+        enable_hhi_penalty = npower_params.get("enable_hhi", False) if npower_params else False
+        if enable_hhi_penalty:
+            target_months = npower_params.get("hhi_target_months", 12.0)
+            penalty_strength = npower_params.get("hhi_penalty_strength", 0.5)
+
+            target_hhi = 1.0 / max(1.0, target_months)
+            
+            tot_buy = sum(buy_spends)
+            hhi_buy = sum((s / tot_buy) ** 2 for s in buy_spends) if tot_buy > 0 else 1.0
+            
+            tot_sell = sum(sell_solds)
+            hhi_sell = sum((s / tot_sell) ** 2 for s in sell_solds) if tot_sell > 0 else 1.0
+            
+            avg_hhi = (hhi_buy + hhi_sell) / 2.0
+            
+            if avg_hhi > target_hhi:
+                excess_ratio = min(1.0, (avg_hhi - target_hhi) / (1.0 - target_hhi))
+                penalty_multiplier = 1.0 - (penalty_strength * excess_ratio)
+                calmar = base_calmar * penalty_multiplier
+            else:
+                calmar = base_calmar
+        else:
+            calmar = base_calmar
 
         if is_npower:
             buy_info = {"buy_threshold": cur_np_bt, "buy_n": cur_np_bn}
@@ -680,7 +713,8 @@ def run_monte_carlo_optimization(data, start_date, end_date, initial_cap, monthl
         if ann_ret < worst_target_ret:
             worst_target_ret = ann_ret
             worst_target_params = params_dict
-
+        
+        # We also might want to track fallback by base_calmar or calmar. Using penalized calmar for fallback.
         if calmar > fallback_calmar:
             fallback_calmar = calmar
             fallback_params = params_dict
@@ -879,11 +913,13 @@ def run_monte_carlo_optimization(data, start_date, end_date, initial_cap, monthl
 
         # ---- 回撤稳定区/收益稳定区公用列映射 ----
         dd_cols = {'dd': '最大回撤', 'ret': '年化收益', 'calmar': '卡玛'}
+        if not is_dynamic:
+            dd_cols['slope'] = '斜率'
+            dd_cols['icpt'] = '截距'
+
         if is_np_mode:
             dd_cols.update({'buy_threshold': '买入阈值', 'buy_n': '买入N', 'sell_threshold': '卖出阈值', 'sell_n': '卖出N'})
         else:
-            if not is_dynamic:
-                dd_cols['slope'] = '斜率'
             for ti in range(1, num_buy_tiers + 1):
                 dd_cols[f'buy_t{ti}'] = f'买入阈值{ti}'
                 dd_cols[f'buy_r{ti}'] = f'买入比例{ti}'
@@ -905,6 +941,8 @@ def run_monte_carlo_optimization(data, start_date, end_date, initial_cap, monthl
                     display_df_in[c] = display_df_in[c].map(lambda v: f"{v:.2f}")
                 elif c == '斜率':
                     display_df_in[c] = display_df_in[c].map(lambda v: f"{v:.6f}")
+                elif c == '截距':
+                    display_df_in[c] = display_df_in[c].map(lambda v: f"{v:.4f}")
             return display_df_in
 
         # ---- 回撤稳定区：回撤相近，收益递增 ----
@@ -1253,10 +1291,22 @@ if st.session_state.primary_result is not None:
         mc_b_gap = col_mc3.number_input("买档最小间距 (%)", value=rec_b_gap, step=0.1, format="%.1f", disabled=(cur_buy_mode_2 == "npower"), key="t2_mc_bgap")
         mc_s_gap = col_mc4.number_input("卖档最小间距 (%)", value=rec_s_gap, step=0.1, format="%.1f", disabled=(cur_buy_mode_2 == "npower"), key="t2_mc_sgap")
 
-        npower_params_input_2 = None
+        npower_params_input_2 = {}
         if cur_buy_mode_2 == "npower":
             np_min_ratio_2 = st.number_input("寻优时最低交易比例 (%)", value=1.0, step=0.5, min_value=0.0, format="%.1f", key="t2_np_min")
-            npower_params_input_2 = {"min_ratio": np_min_ratio_2 / 100.0}
+            npower_params_input_2["min_ratio"] = np_min_ratio_2 / 100.0
+            
+        st.markdown("---")
+        st.markdown("### 🛡️ 防过拟合惩罚配置 (HHI集中度惩罚)")
+        st.caption("避免算法找到“单月全仓抄底”的极端参数，鼓励在市场极值期平稳建仓/平仓。")
+        col_hhi1, col_hhi2, col_hhi3 = st.columns(3)
+        enable_hhi = col_hhi1.checkbox("启用集中度惩罚", value=True, key="t2_en_hhi", help="若开启，1-2个月内急速建仓的策略将受到卡玛降级惩罚。")
+        hhi_target_months = col_hhi2.number_input("目标建仓期 (月)", value=12, step=1, min_value=1, key="t2_hhi_months", help="期望在一轮跌势中耗时几个月买满。推荐 12-18 个月。")
+        hhi_penalty_strength = col_hhi3.number_input("惩罚力度 (0~1)", value=0.5, step=0.1, min_value=0.0, max_value=1.0, key="t2_hhi_str", help="0.5表示最极端情况下，卡玛得分减半。")
+        
+        npower_params_input_2["enable_hhi"] = enable_hhi
+        npower_params_input_2["hhi_target_months"] = float(hhi_target_months)
+        npower_params_input_2["hhi_penalty_strength"] = float(hhi_penalty_strength)
 
         if cur_buy_mode_2 == "npower":
             mc_buy_dims = 2
