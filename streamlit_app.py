@@ -1117,7 +1117,9 @@ if run_primary:
     if custom_code.strip():
         sel_name = custom_code.strip()
         sel_code = custom_code.strip()
-        if "akshare_sina" in custom_source:
+        if custom_source == "local":
+            sel_source = "local"
+        elif "akshare_sina" in custom_source:
             sel_source = "akshare_sina"
         elif "akshare_tx" in custom_source:
             sel_source = "akshare_tx"
@@ -1295,7 +1297,9 @@ if st.session_state.primary_result is not None:
             if custom_code.strip():
                 sel_name = custom_code.strip()
                 sel_code = custom_code.strip()
-                if "akshare_sina" in custom_source:
+                if custom_source == "local":
+                    sel_source = "local"
+                elif "akshare_sina" in custom_source:
                     sel_source = "akshare_sina"
                 elif "akshare_tx" in custom_source:
                     sel_source = "akshare_tx"
@@ -1462,7 +1466,9 @@ if st.session_state.primary_result is not None:
             if custom_code.strip():
                 sel_name_star = custom_code.strip()
                 sel_code_star = custom_code.strip()
-                if "akshare_sina" in custom_source:
+                if custom_source == "local":
+                    sel_source_star = "local"
+                elif "akshare_sina" in custom_source:
                     sel_source_star = "akshare_sina"
                 elif "akshare_tx" in custom_source:
                     sel_source_star = "akshare_tx"
