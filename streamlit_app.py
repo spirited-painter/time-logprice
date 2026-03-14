@@ -72,12 +72,35 @@ FREQ_CONFIG = {
     "monthly": {"resample": "ME", "fmt": "%Y-%m", "periods_per_year": 12},
     "weekly":  {"resample": "W",  "fmt": "%Y-%m-%d", "periods_per_year": 52},
     "daily":   {"resample": None, "fmt": "%Y-%m-%d", "periods_per_year": 252},
+    "hourly":  {"resample": None, "fmt": "%Y-%m-%d %H:%M", "periods_per_year": 252 * 4},
 }
 
 
-def fetch_data(asset_code, source, freq="monthly"):
-    """获取 OHLCV 数据。freq: 'monthly'/'weekly'/'daily'。
-    source: 'akshare'/'akshare_em'(东方财富) / 'akshare_sina'(新浪) / 'akshare_tx'(腾讯) / 'yfinance'。"""
+def fetch_data(asset_code, source, freq="monthly", uploaded_file=None):
+    """获取 OHLCV 数据。freq: 'monthly'/'weekly'/'daily'/'hourly'。
+    source: 'akshare'/'akshare_em'(东方财富) / 'akshare_sina'(新浪) / 'akshare_tx'(腾讯) / 'yfinance' / 'local'。"""
+    if source == "local" and uploaded_file is not None:
+        try:
+            uploaded_file.seek(0)
+            df = pd.read_csv(uploaded_file, sep='\t', encoding='gbk', thousands=',')
+            df['date'] = df['时间'].astype(str).str.split(',').str[0]
+            df['date'] = pd.to_datetime(df['date'], errors='coerce')
+            rename_dict = {'开盘': 'Open', '最高': 'High', '最低': 'Low', '收盘': 'Close'}
+            for col in df.columns:
+                if '总手' in col or '成交量' in col:
+                    rename_dict[col] = 'Volume'
+            df.rename(columns=rename_dict, inplace=True)
+            result = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
+            result.index = df['date']
+            result.dropna(inplace=True)
+            cfg = FREQ_CONFIG.get(freq, FREQ_CONFIG["daily"])
+            result.index = result.index.strftime(cfg["fmt"])
+            result.index.name = '日期'
+            return result
+        except Exception as e:
+            st.error(f"解析本地文件失败: {e}")
+            return None
+
     if source in ("akshare", "akshare_em"):
         import akshare as ak
         daily_data = ak.stock_zh_index_daily_em(
@@ -166,11 +189,11 @@ def run_full_analysis(index_name, index_code, source="akshare",
                       backtest_start_date=None, backtest_end_date=None,
                       initial_capital=10000.0, monthly_investment=1000.0,
                       regression_mode="static", freq="monthly",
-                      buy_mode="tiered", npower_params=None):
+                      buy_mode="tiered", npower_params=None, uploaded_file=None):
     """运行完整分析，返回 (processed_data, slope, intercept, figures_list)。"""
     ppy = FREQ_CONFIG[freq]["periods_per_year"]
     try:
-        data = fetch_data(index_code, source, freq=freq)
+        data = fetch_data(index_code, source, freq=freq, uploaded_file=uploaded_file)
         if data is None or data.empty:
             st.error(f"未能获取到 '{index_code}' 的数据。")
             return None
@@ -179,7 +202,7 @@ def run_full_analysis(index_name, index_code, source="akshare",
         return None
 
     processed_data = data[['Close']].copy()
-    processed_data.rename(columns={'Close': '当月收盘价'}, inplace=True)
+    processed_data.rename(columns={'Close': '当期收盘价'}, inplace=True)
     processed_data.reset_index(inplace=True)
     processed_data.insert(1, '序号', range(1, len(processed_data) + 1))
 
@@ -190,7 +213,7 @@ def run_full_analysis(index_name, index_code, source="akshare",
         processed_data['序号'] = range(1, len(processed_data) + 1)
 
     x = processed_data['序号']
-    log_y = np.log(processed_data['当月收盘价'])
+    log_y = np.log(processed_data['当期收盘价'])
 
     if regression_mode == "dynamic":
         dyn_slopes, dyn_intercepts, dyn_theo = compute_dynamic_regression(
@@ -236,7 +259,7 @@ def run_full_analysis(index_name, index_code, source="akshare",
                     else (np.nan if key in ['annual_irr', 'annual_twr'] else 1000.0))
             continue
 
-        close_price = row['当月收盘价']
+        close_price = row['当期收盘价']
         percentage = row['百分比']
         assets_before_sip = shares_held * close_price + cash_held
 
@@ -344,7 +367,7 @@ def run_full_analysis(index_name, index_code, source="akshare",
     processed_data['仓位百分比'] = 1 - cash_percentage
     processed_data['累计投资'] = results_lists['cumulative_investment']
     processed_data['收益'] = results_lists['profit']
-    processed_data['当月真实收益率'] = results_lists['actual_monthly_return']
+    processed_data['当期真实收益率'] = results_lists['actual_monthly_return']
     processed_data['净值指数'] = results_lists['net_value_index']
     processed_data['年化收益率(IRR)'] = results_lists['annual_irr']
     processed_data['年化收益率(TWR)'] = results_lists['annual_twr']
@@ -357,7 +380,7 @@ def run_full_analysis(index_name, index_code, source="akshare",
 
     # 图 1: 实际价格 vs 趋势 & 仓位
     fig1, ax1 = plt.subplots(figsize=(16, 8))
-    ax1.plot(dates_for_plot, processed_data['当月收盘价'],
+    ax1.plot(dates_for_plot, processed_data['当期收盘价'],
              label=f'{index_code} (Actual Price)', color='blue', linewidth=2)
     ax1.plot(dates_for_plot, processed_data['理论值'],
              label='Exponential Trendline (Theory)', color='red', linestyle='--', linewidth=2)
@@ -414,7 +437,7 @@ def run_full_analysis(index_name, index_code, source="akshare",
     start_idx = processed_data[
         processed_data['日期'] == backtest_start_date].index[0] if backtest_start_date else 0
 
-    price_series = processed_data['当月收盘价']
+    price_series = processed_data['当期收盘价']
     net_value_series = processed_data['净值指数']
 
     if start_idx < len(price_series):
@@ -481,7 +504,7 @@ def run_monte_carlo_optimization(data, start_date, end_date, initial_cap, monthl
         end_idx = end_indices[0] + 1 if len(end_indices) > 0 else len(data)
     else:
         end_idx = len(data)
-    close_prices = data['当月收盘价'].values[start_idx:end_idx]
+    close_prices = data['当期收盘价'].values[start_idx:end_idx]
     x_arr = data['序号'].values[start_idx:end_idx]
     num_periods = len(close_prices)
     if num_periods < ppy:
@@ -1025,39 +1048,67 @@ if 'show_star_backtest_picker' not in st.session_state:
     st.session_state.show_star_backtest_picker = False
 
 # ---------- 侧边栏：标的选择 ----------
-st.sidebar.header("标的选择")
-asset_category = st.sidebar.selectbox("资产类别", list(ASSET_MAP.keys()), index=0)
-asset_names = list(ASSET_MAP[asset_category].keys())
-asset_name_sel = st.sidebar.selectbox("选择标的", asset_names, index=0)
+st.sidebar.header("数据来源")
+data_source_type = st.sidebar.radio("数据源类型", ["网络 API (内置标的)", "本地数据文件"], index=0, horizontal=True)
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("或输入自定义代码")
-custom_code = st.sidebar.text_input("代码", placeholder="例如 sz399006 或 ^GSPC")
-custom_source = st.sidebar.selectbox("数据源", [
-    "akshare_sina (A股-新浪)",
-    "akshare (A股-东方财富)",
-    "akshare_tx (A股-腾讯)",
-    "yfinance (全球)",
-], index=0)
+if data_source_type == "本地数据文件":
+    st.sidebar.subheader("上传本地文件")
+    uploaded_file = st.sidebar.file_uploader("支持 .xls (GBK/TSV格式) 文件", type=["xls", "csv", "txt"])
+    if uploaded_file:
+        filename = uploaded_file.name.lower()
+        parts = filename.replace(".xls", "").replace(".csv", "").replace(".txt", "").split()
+        guessed_freq = "monthly"
+        if len(parts) >= 1:
+            if "month" in parts[0]: guessed_freq = "monthly"
+            elif "week" in parts[0]: guessed_freq = "weekly"
+            elif "day" in parts[0] or "daily" in parts[0]: guessed_freq = "daily"
+            elif "hour" in parts[0] or "60" in parts[0]: guessed_freq = "hourly"
+        guessed_name = parts[1].upper() if len(parts) >= 2 else "LOCAL_ASSET"
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("回归模式")
-regression_mode = st.sidebar.radio(
-    "选择对数回归方式",
-    ["静态 (全局拟合)", "动态 (扩展窗口)"],
-    index=0,
-    help="静态：使用全部历史数据拟合一条趋势线。动态：从最早2个月数据开始逐步扩展拟合，每月使用截至当月的趋势线。"
-)
-st.session_state.regression_mode = "dynamic" if "动态" in regression_mode else "static"
+        st.sidebar.info(f"✅ 成功加载: {guessed_name} ({guessed_freq})")
+        
+        asset_category = None
+        asset_name_sel = guessed_name
+        custom_code = guessed_name
+        custom_source = "local"
+        
+        # Override the freq picker to purely show what was detected
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("数据频率")
+        freq_choice = st.sidebar.radio(
+            "K线频率 (已从文件名自动识别)", ["月线", "周线", "日线", "60分钟线"], 
+            index=["monthly", "weekly", "daily", "hourly"].index(guessed_freq), disabled=True
+        )
+        st.session_state.freq = guessed_freq
+        
+    else:
+        st.sidebar.warning("请上传本地数据文件以继续。")
+        st.stop()
+else:
+    uploaded_file = None
+    st.sidebar.header("标的选择")
+    asset_category = st.sidebar.selectbox("资产类别", list(ASSET_MAP.keys()), index=0)
+    asset_names = list(ASSET_MAP[asset_category].keys())
+    asset_name_sel = st.sidebar.selectbox("选择标的", asset_names, index=0)
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("数据频率")
-freq_choice = st.sidebar.radio(
-    "K线频率", ["月线", "周线", "日线"], index=0,
-    help="月线：按月汇总。周线：按周汇总。日线：使用每日数据。"
-)
-FREQ_LABEL_MAP = {"月线": "monthly", "周线": "weekly", "日线": "daily"}
-st.session_state.freq = FREQ_LABEL_MAP[freq_choice]
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("或输入自定义代码")
+    custom_code = st.sidebar.text_input("代码", placeholder="例如 sz399006 或 ^GSPC")
+    custom_source = st.sidebar.selectbox("数据源", [
+        "akshare_sina (A股-新浪)",
+        "akshare (A股-东方财富)",
+        "akshare_tx (A股-腾讯)",
+        "yfinance (全球)",
+    ], index=0)
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("数据频率")
+    freq_choice = st.sidebar.radio(
+        "K线频率", ["月线", "周线", "日线"], index=0,
+        help="月线：按月汇总。周线：按周汇总。日线：使用每日数据。"
+    )
+    FREQ_LABEL_MAP = {"月线": "monthly", "周线": "weekly", "日线": "daily", "60分钟线": "hourly"}
+    st.session_state.freq = FREQ_LABEL_MAP[freq_choice]
 
 run_primary = st.sidebar.button("▶️ Run Primary Analysis", type="primary", use_container_width=True)
 
@@ -1083,7 +1134,7 @@ if run_primary:
     with st.spinner(f"正在分析 {sel_name} ({sel_code}) [{sel_source}] [{freq_choice}] …"):
         result = run_full_analysis(sel_name, sel_code, source=sel_source,
                                    regression_mode=st.session_state.regression_mode,
-                                   freq=st.session_state.freq)
+                                   freq=st.session_state.freq, uploaded_file=uploaded_file)
 
     if result is not None:
         st.session_state.primary_result = result
@@ -1097,11 +1148,11 @@ if st.session_state.primary_result is not None:
 
     # 数据表格
     format_dict = {
-        '当月收盘价': '{:.3f}', '理论对数值': '{:.4f}', '理论值': '{:.2f}',
+        '当期收盘价': '{:.3f}', '理论对数值': '{:.4f}', '理论值': '{:.2f}',
         '百分比': '{:.2%}', '滚动斜率': '{:.6f}', '滚动截距': '{:.4f}',
         '持有股票数量': '{:.4f}', '股票价值': '{:,.2f}',
         '现金': '{:,.2f}', '仓位百分比': '{:.2%}', '总资产': '{:,.2f}',
-        '累计投资': '{:.3f}', '收益': '{:,.2f}', '当月真实收益率': '{:.2%}',
+        '累计投资': '{:.3f}', '收益': '{:,.2f}', '当期真实收益率': '{:.2%}',
         '净值指数': '{:,.2f}', '年化收益率(IRR)': '{:.2%}', '年化收益率(TWR)': '{:.2%}', '最大回撤': '{:.2%}',
         '年化波动率': '{:.2%}',
     }
@@ -1146,7 +1197,7 @@ if st.session_state.primary_result is not None:
 
         t1_col_cap, t1_col_inv = st.columns(2)
         initial_capital_1 = t1_col_cap.number_input("初始资金", value=10000.0, step=1000.0, format="%.2f", key="t1_init_cap")
-        monthly_investment_1 = t1_col_inv.number_input("每月定投资金", value=1000.0, step=100.0, format="%.2f", key="t1_monthly_inv")
+        monthly_investment_1 = t1_col_inv.number_input("每期定投资金", value=1000.0, step=100.0, format="%.2f", key="t1_monthly_inv")
 
         st.markdown("---")
         cur_reg_mode = st.session_state.regression_mode
@@ -1265,7 +1316,7 @@ if st.session_state.primary_result is not None:
                     backtest_start_date=backtest_start_1, backtest_end_date=backtest_end_1,
                     initial_capital=initial_capital_1, monthly_investment=monthly_investment_1,
                     regression_mode=cur_reg_mode, freq=st.session_state.freq,
-                    buy_mode=cur_buy_mode_1, npower_params=npower_params_input_1)
+                    buy_mode=cur_buy_mode_1, npower_params=npower_params_input_1, uploaded_file=uploaded_file)
             if custom_result is not None:
                 c_data, _, _, c_figs = custom_result
                 c_styled = c_data.style.format(format_dict, na_rep='NA')
@@ -1294,7 +1345,7 @@ if st.session_state.primary_result is not None:
 
         t2_col_cap, t2_col_inv = st.columns(2)
         initial_capital_2 = t2_col_cap.number_input("初始资金", value=10000.0, step=1000.0, format="%.2f", key="t2_init_cap")
-        monthly_investment_2 = t2_col_inv.number_input("每月定投资金", value=1000.0, step=100.0, format="%.2f", key="t2_monthly_inv")
+        monthly_investment_2 = t2_col_inv.number_input("每期定投资金", value=1000.0, step=100.0, format="%.2f", key="t2_monthly_inv")
 
         if cur_reg_mode == "dynamic":
             st.caption("ℹ️ 动态回归模式：拟合始终从历史最早数据开始，无需搜索斜率/截距。")
@@ -1458,7 +1509,7 @@ if st.session_state.primary_result is not None:
                     regression_mode=cur_reg_mode,
                     freq=st.session_state.freq,
                     buy_mode=s_buy_mode,
-                    npower_params=s_npower_params)
+                    npower_params=s_npower_params, uploaded_file=uploaded_file)
             if star_result is not None:
                 s_data, _, _, s_figs = star_result
                 s_styled = s_data.style.format(format_dict, na_rep='NA')
@@ -1502,7 +1553,7 @@ if st.session_state.primary_result is not None:
                         regression_mode=cur_reg_mode,
                         freq=st.session_state.freq,
                         buy_mode=w_buy_mode,
-                        npower_params=w_npower_params)
+                        npower_params=w_npower_params, uploaded_file=uploaded_file)
                 if worst_result is not None:
                     w_data, _, _, w_figs = worst_result
                     w_styled = w_data.style.format(format_dict, na_rep='NA')
@@ -1532,7 +1583,7 @@ if st.session_state.primary_result is not None:
             
             oos_col_cap, oos_col_inv = st.columns(2)
             oos_initial_capital = oos_col_cap.number_input("验证期初始资金", value=initial_capital_2, step=1000.0, format="%.2f", key="oos_init_cap")
-            oos_monthly_investment = oos_col_inv.number_input("验证期每月定投资金", value=monthly_investment_2, step=100.0, format="%.2f", key="oos_monthly_inv")
+            oos_monthly_investment = oos_col_inv.number_input("验证期每期定投资金", value=monthly_investment_2, step=100.0, format="%.2f", key="oos_monthly_inv")
 
             if st.button("▶️ 执行跨期验证", type="primary", use_container_width=True, key="btn_run_oos"):
                 st.markdown("#### ↓↓↓ 验证期回测结果 ↓↓↓")
@@ -1548,7 +1599,7 @@ if st.session_state.primary_result is not None:
                         regression_mode=cur_reg_mode,
                         freq=st.session_state.freq,
                         buy_mode=s_buy_mode,
-                        npower_params=s_npower_params)
+                        npower_params=s_npower_params, uploaded_file=uploaded_file)
                 if oos_result is not None:
                     o_data, _, _, o_figs = oos_result
                     o_styled = o_data.style.format(format_dict, na_rep='NA')
