@@ -1,10 +1,6 @@
 streamlit
 akshare
-tushare
 yfinance
-numpy_financial
-seaborn
-scipy
-matplotlib
 pandas
 numpy
+plotly
