@@ -1110,6 +1110,16 @@ else:
     FREQ_LABEL_MAP = {"月线": "monthly", "周线": "weekly", "日线": "daily", "60分钟线": "hourly"}
     st.session_state.freq = FREQ_LABEL_MAP[freq_choice]
 
+st.sidebar.markdown("---")
+st.sidebar.subheader("回归模式")
+regression_mode = st.sidebar.radio(
+    "选择对数回归方式",
+    ["静态 (全局拟合)", "动态 (扩展窗口)"],
+    index=0,
+    help="静态：使用全部历史数据拟合一条趋势线。动态：从最早2个月数据开始逐步扩展拟合，每月使用截至当月的趋势线。"
+)
+st.session_state.regression_mode = "dynamic" if "动态" in regression_mode else "static"
+
 run_primary = st.sidebar.button("▶️ Run Primary Analysis", type="primary", use_container_width=True)
 
 # ---------- 主分析运行 ----------
